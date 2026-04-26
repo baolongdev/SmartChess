@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>SmartChess Terminal Board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="sticky-shell">
+      <header id="header">
+        <div class="hdr-prompt">
+          <span class="c-g">user[pro]</span><span class="c-m">@</span><span class="c-b">SmartChess</span>
+          <span class="c-m"> $ </span><span class="c-t">board --monitor fen</span><span class="cursor"></span>
+        </div>
+        <div class="hdr-sub">// terminal board interface</div>
+        <div class="hdr-pills">
+          <span id="bleStatus" class="pill disconnected">Disconnected</span>
+          <span id="sessionStatus" class="pill off">Session Off</span>
+          <span id="deviceName" class="pill pill-blue">Device: -</span>
+        </div>
+      </header>
+
+      <section id="actionbar">
+        <button id="btnScan" class="btn btn-scan">[ ] scan + connect</button>
+        <button id="btnStart" class="btn btn-start" disabled>[ ] start</button>
+        <button id="btnClear" class="btn">[ ] clear history</button>
+        <button id="btnFlip" class="btn">[ ] flip board</button>
+      </section>
+    </div>
+
+    <p id="message" class="message">// waiting for BLE device...</p>
+
+    <main id="main">
+      <section id="left-panel">
+        <div class="sec-head">
+          <span class="sec-title c-a">board_view</span>
+          <span class="sec-meta">// live orientation</span>
+        </div>
+
+        <div class="board-area">
+          <div class="board-outer">
+            <div class="rank-labels" id="rankLabels"></div>
+            <div class="board-col">
+              <div id="board"></div>
+              <div class="file-labels" id="fileLabels"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="board-nav">
+          <button id="btnFirst" class="btn-nav" title="First position" aria-label="First position">⏮</button>
+          <button id="btnPrev" class="btn-nav" title="Previous position" aria-label="Previous position">◀</button>
+          <span id="counter" class="nav-info">0 / 0</span>
+          <button id="btnNext" class="btn-nav" title="Next position" aria-label="Next position">▶</button>
+          <button id="btnLast" class="btn-nav" title="Last position" aria-label="Last position">⏭</button>
+        </div>
+      </section>
+
+      <aside id="right-panel">
+        <section class="r-section">
+          <div class="sec-head">
+            <span class="sec-title c-b">fen_live</span>
+            <span class="sec-meta">// current position</span>
+          </div>
+          <div class="fen-live">
+            <div class="fen-current-label">// current_fen</div>
+            <div id="currentFen" class="fen-current-value">-</div>
+            <div class="fen-copy-row">
+              <button id="btnCopyFen" class="btn-nav btn-copy">copy fen</button>
+            </div>
+
+            <div class="fen-meta">
+              <div class="meta-row"><span class="k">turn:</span><span id="infoTurn" class="v">-</span></div>
+              <div class="meta-row"><span class="k">castling:</span><span id="infoCastling" class="v">-</span></div>
+              <div class="meta-row"><span class="k">en-passant:</span><span id="infoEP" class="v">-</span></div>
+              <div class="meta-row"><span class="k">move:</span><span id="infoMove" class="v">-</span></div>
+              <div class="meta-row"><span class="k">turn timer:</span><span id="infoTurnTimer" class="v">00:00</span></div>
+              <div class="meta-row"><span class="k">session:</span><span id="infoSessionTimer" class="v">00:00</span></div>
+              <div class="meta-row"><span class="k">positions:</span><span id="infoPositions" class="v">0</span></div>
+              <div class="meta-row"><span class="k">avg/position:</span><span id="infoAvgMove" class="v">00:00</span></div>
+              <div class="meta-row"><span class="k">last delta:</span><span id="infoLastDelta" class="v">00:00</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="r-section grow">
+          <div class="sec-head">
+            <span class="sec-title c-g">fen_history</span>
+            <div class="sec-actions">
+              <span id="fenCount" class="sec-meta">(0)</span>
+              <button id="btnExportFen" class="btn-nav btn-copy" disabled>export</button>
+            </div>
+          </div>
+          <div id="fenList" class="fen-list"></div>
+        </section>
+
+        <section class="r-section">
+          <div class="sec-head">
+            <span class="sec-title c-a">cmd_protocol</span>
+            <span class="sec-meta">// START / STOP with ACK</span>
+          </div>
+          <div class="proto-box" id="protoBox">
+            <div class="proto-line"><span class="k">cmd_char:</span> <span class="v">3f0e0003-70a1-4f8a-a6a3-51e9590e9f20</span></div>
+            <div class="proto-line"><span class="k">log_char:</span> <span class="v">3f0e0004-70a1-4f8a-a6a3-51e9590e9f20</span></div>
+            <div class="proto-line"><span class="k">flow:</span> <span class="v">WEB -> WRITE START/STOP -> ACK -> LOG</span></div>
+          </div>
+        </section>
+
+        <section class="r-section">
+          <div class="sec-head">
+            <span class="sec-title c-r">error_log</span>
+            <span id="logCount" class="sec-meta">0</span>
+          </div>
+          <div id="logList" class="log-list"></div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
