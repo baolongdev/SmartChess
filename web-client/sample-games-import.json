@@ -1,0 +1,190 @@
+{
+  "exported_at": "2026-04-26T18:00:00.000Z",
+  "total_games": 4,
+  "games": [
+    {
+      "id": 2001,
+      "gameNumber": 1,
+      "playedAt": "2026-04-22T17:12:00.000Z",
+      "result": "white",
+      "moves": 27,
+      "timeStr": "00:09:47",
+      "endFen": "r4rk1/pp3ppp/2n1bn2/3q4/3P4/2N1PN2/PP3PPP/R2Q1RK1 b - - 1 14",
+      "fenTrail": [
+        {
+          "index": 1,
+          "moveNumber": 1,
+          "sideToMove": "w",
+          "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+          "timestamp": "2026-04-22T17:12:01.000Z"
+        },
+        {
+          "index": 2,
+          "moveNumber": 1,
+          "sideToMove": "b",
+          "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+          "timestamp": "2026-04-22T17:12:07.000Z"
+        },
+        {
+          "index": 3,
+          "moveNumber": 2,
+          "sideToMove": "w",
+          "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+          "timestamp": "2026-04-22T17:12:13.000Z"
+        },
+        {
+          "index": 4,
+          "moveNumber": 2,
+          "sideToMove": "b",
+          "fen": "rnbqkbnr/pppp1ppp/8/4p3/3PP3/8/PPP2PPP/RNBQKBNR b KQkq d3 0 2",
+          "timestamp": "2026-04-22T17:12:19.000Z"
+        },
+        {
+          "index": 5,
+          "moveNumber": 3,
+          "sideToMove": "w",
+          "fen": "r4rk1/pp3ppp/2n1bn2/3q4/3P4/2N1PN2/PP3PPP/R2Q1RK1 b - - 1 14",
+          "timestamp": "2026-04-22T17:21:47.000Z"
+        }
+      ]
+    },
+    {
+      "id": 2002,
+      "gameNumber": 2,
+      "playedAt": "2026-04-23T16:55:00.000Z",
+      "result": "black",
+      "moves": 33,
+      "timeStr": "00:11:29",
+      "endFen": "r2q1rk1/pp3ppp/2n2n2/2bp4/3P4/2N1PN2/PPQ2PPP/R1B2RK1 w - - 4 17",
+      "fenTrail": [
+        {
+          "index": 1,
+          "moveNumber": 1,
+          "sideToMove": "w",
+          "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+          "timestamp": "2026-04-23T16:55:01.000Z"
+        },
+        {
+          "index": 2,
+          "moveNumber": 1,
+          "sideToMove": "b",
+          "fen": "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1",
+          "timestamp": "2026-04-23T16:55:08.000Z"
+        },
+        {
+          "index": 3,
+          "moveNumber": 2,
+          "sideToMove": "w",
+          "fen": "rnbqkbnr/pppp1ppp/8/4p3/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 0 2",
+          "timestamp": "2026-04-23T16:55:15.000Z"
+        },
+        {
+          "index": 4,
+          "moveNumber": 2,
+          "sideToMove": "b",
+          "fen": "rnbqkbnr/pppp1ppp/8/4p3/3P4/5N2/PPP1PPPP/RNBQKB1R b KQkq - 1 2",
+          "timestamp": "2026-04-23T16:55:21.000Z"
+        },
+        {
+          "index": 5,
+          "moveNumber": 3,
+          "sideToMove": "w",
+          "fen": "r2q1rk1/pp3ppp/2n2n2/2bp4/3P4/2N1PN2/PPQ2PPP/R1B2RK1 w - - 4 17",
+          "timestamp": "2026-04-23T17:06:29.000Z"
+        }
+      ]
+    },
+    {
+      "id": 2003,
+      "gameNumber": 3,
+      "playedAt": "2026-04-24T14:30:00.000Z",
+      "result": "draw",
+      "moves": 52,
+      "timeStr": "00:21:03",
+      "endFen": "8/5pk1/4p1p1/2p1P2p/2P2P1P/3r2P1/5K2/8 w - - 6 53",
+      "fenTrail": [
+        {
+          "index": 1,
+          "moveNumber": 1,
+          "sideToMove": "w",
+          "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+          "timestamp": "2026-04-24T14:30:01.000Z"
+        },
+        {
+          "index": 2,
+          "moveNumber": 1,
+          "sideToMove": "b",
+          "fen": "rnbqkbnr/pppppppp/8/8/8/4P3/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+          "timestamp": "2026-04-24T14:30:08.000Z"
+        },
+        {
+          "index": 3,
+          "moveNumber": 2,
+          "sideToMove": "w",
+          "fen": "rnbqkbnr/ppp1pppp/8/3p4/8/4P3/PPPP1PPP/RNBQKBNR w KQkq d6 0 2",
+          "timestamp": "2026-04-24T14:30:16.000Z"
+        },
+        {
+          "index": 4,
+          "moveNumber": 2,
+          "sideToMove": "b",
+          "fen": "rnbqkbnr/ppp1pppp/8/3p4/8/3PP3/PPP2PPP/RNBQKBNR b KQkq - 0 2",
+          "timestamp": "2026-04-24T14:30:23.000Z"
+        },
+        {
+          "index": 5,
+          "moveNumber": 3,
+          "sideToMove": "w",
+          "fen": "8/5pk1/4p1p1/2p1P2p/2P2P1P/3r2P1/5K2/8 w - - 6 53",
+          "timestamp": "2026-04-24T14:51:03.000Z"
+        }
+      ]
+    },
+    {
+      "id": 2004,
+      "gameNumber": 4,
+      "playedAt": "2026-04-25T18:20:00.000Z",
+      "result": "white",
+      "moves": 45,
+      "timeStr": "00:17:36",
+      "endFen": "2r3k1/5ppp/1p2pn2/p2q4/P2P4/2N1PN2/1P3PPP/2R3K1 b - - 3 23",
+      "fenTrail": [
+        {
+          "index": 1,
+          "moveNumber": 1,
+          "sideToMove": "w",
+          "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+          "timestamp": "2026-04-25T18:20:01.000Z"
+        },
+        {
+          "index": 2,
+          "moveNumber": 1,
+          "sideToMove": "b",
+          "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+          "timestamp": "2026-04-25T18:20:08.000Z"
+        },
+        {
+          "index": 3,
+          "moveNumber": 2,
+          "sideToMove": "w",
+          "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+          "timestamp": "2026-04-25T18:20:15.000Z"
+        },
+        {
+          "index": 4,
+          "moveNumber": 2,
+          "sideToMove": "b",
+          "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+          "timestamp": "2026-04-25T18:20:22.000Z"
+        },
+        {
+          "index": 5,
+          "moveNumber": 3,
+          "sideToMove": "w",
+          "fen": "2r3k1/5ppp/1p2pn2/p2q4/P2P4/2N1PN2/1P3PPP/2R3K1 b - - 3 23",
+          "timestamp": "2026-04-25T18:37:36.000Z"
+        }
+      ]
+    }
+  ]
+}

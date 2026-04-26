@@ -3,6 +3,7 @@ const SERVICE_UUID = "3f0e0001-70a1-4f8a-a6a3-51e9590e9f20";
 const FEN_CHAR_UUID = "3f0e0002-70a1-4f8a-a6a3-51e9590e9f20";
 const CMD_CHAR_UUID = "3f0e0003-70a1-4f8a-a6a3-51e9590e9f20";
 const LOG_CHAR_UUID = "3f0e0004-70a1-4f8a-a6a3-51e9590e9f20";
+const DB_KEY = "smartchess_games";
 const DEFAULT_START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 const PIECE_UNICODE = {
@@ -42,6 +43,7 @@ let flipped = false;
 let fenHistory = [];
 let fenCursor = -1;
 let fenTimestamps = [];
+let currentGame = null;
 
 let sessionStartMs = null;
 let sessionAccumulatedMs = 0;
@@ -77,6 +79,8 @@ const els = {
   btnNext: document.getElementById("btnNext"),
   btnLast: document.getElementById("btnLast"),
 
+  gamesCount: document.getElementById("gamesCount"),
+
   board: document.getElementById("board"),
   boardArea: document.querySelector(".board-area"),
   rankLabels: document.getElementById("rankLabels"),
@@ -86,7 +90,6 @@ const els = {
   fenCount: document.getElementById("fenCount"),
   logList: document.getElementById("logList"),
   logCount: document.getElementById("logCount"),
-  protoBox: document.getElementById("protoBox"),
   toast: document.getElementById("toast"),
   counter: document.getElementById("counter"),
   currentFen: document.getElementById("currentFen"),
@@ -310,11 +313,6 @@ function onDeviceLogNotify(event) {
   }
 }
 
-function updateProtocolBox(ok) {
-  if (!els.protoBox) return;
-  els.protoBox.classList.toggle("active", ok);
-}
-
 function ensureAudioContext() {
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   if (!AudioCtx) return null;
@@ -380,17 +378,20 @@ function onBoardWheel(e) {
 }
 
 function formatDuration(ms) {
-  const totalSec = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(totalSec / 3600);
-  const minutes = Math.floor((totalSec % 3600) / 60);
-  const seconds = totalSec % 60;
+  const totalMs = Math.max(0, Math.floor(ms));
+  const hours = Math.floor(totalMs / 3600000);
+  const minutes = Math.floor((totalMs % 3600000) / 60000);
+  const seconds = Math.floor((totalMs % 60000) / 1000);
+  const millis = totalMs % 1000;
 
   const mm = String(minutes).padStart(2, "0");
   const ss = String(seconds).padStart(2, "0");
+  const mmm = String(millis).padStart(3, "0");
+
   if (hours > 0) {
-    return `${String(hours).padStart(2, "0")}:${mm}:${ss}`;
+    return `${String(hours).padStart(2, "0")}:${mm}:${ss}.${mmm}`;
   }
-  return `${mm}:${ss}`;
+  return `${mm}:${ss}.${mmm}`;
 }
 
 function getSessionElapsedMs(now = Date.now()) {
@@ -419,7 +420,7 @@ function updateStatsUI() {
 
 function startUiTick() {
   if (uiTick !== null) return;
-  uiTick = window.setInterval(updateStatsUI, 1000);
+  uiTick = window.setInterval(updateStatsUI, 100);
 }
 
 function setBtnCheckedText(btn, label, checked) {
@@ -527,7 +528,9 @@ function renderBoardFromFen(fen, { silent = false } = {}) {
     }
   }
 
-  els.infoTurn.textContent = parsed.side === "w" ? "White" : "Black";
+  const turnIsWhite = parsed.side === "w";
+  els.infoTurn.textContent = turnIsWhite ? "White" : "Black";
+  els.infoTurn.className = `v turn-${turnIsWhite ? "white" : "black"}`;
   els.infoCastling.textContent = parsed.castling;
   els.infoEP.textContent = parsed.ep === "-" ? "None" : parsed.ep;
   els.infoMove.textContent = `${parsed.fullmove} (half: ${parsed.halfmove})`;
@@ -632,7 +635,6 @@ async function connectBle() {
     lastMoveDeltaMs = 0;
     cmdCharacteristic = null;
     logCharacteristic = null;
-    updateProtocolBox(false);
     updateStatus();
     setMessage("BLE disconnected", !disconnectIntentional);
     if (disconnectIntentional) {
@@ -676,7 +678,6 @@ async function connectBle() {
 
   connected = true;
   updateStatus();
-  updateProtocolBox(Boolean(cmdCharacteristic && logCharacteristic));
   els.deviceName.textContent = `Device: ${bleDevice.name || bleDevice.id}`;
   setMessage("Connected. You can press START.");
   addLogLineDedup("info", "[BLE] Connected");
@@ -724,7 +725,6 @@ async function disconnectBle() {
   cmdCharacteristic = null;
   logCharacteristic = null;
   cmdAckPending = null;
-  updateProtocolBox(false);
   updateStatus();
   resetBoardUiToDefault();
   setMessage("Disconnected", false);
@@ -758,6 +758,7 @@ async function startSession() {
   sessionStartMs = Date.now();
   turnStartMs = sessionStartMs;
   lastMoveDeltaMs = 0;
+  startGameRecording();
 
   sessionOn = true;
   updateStatus();
@@ -781,6 +782,9 @@ async function endSession() {
     sessionStartMs = null;
   }
 
+  const finalFen = (els.currentFen.textContent || "").trim();
+  finishGameRecording(ack, finalFen);
+
   sessionOn = false;
   updateStatus();
   resetBoardUiToDefault();
@@ -794,6 +798,7 @@ function clearHistory() {
   lastRenderedFen = null;
   els.currentFen.textContent = "-";
   els.infoTurn.textContent = "-";
+  els.infoTurn.className = "v";
   els.infoCastling.textContent = "-";
   els.infoEP.textContent = "-";
   els.infoMove.textContent = "-";
@@ -902,6 +907,96 @@ function exportFenHistory() {
   addLogLine("ok", `[EXPORT] FEN history exported (${fenHistory.length})`);
 }
 
+function startGameRecording() {
+  currentGame = {
+    startTimeMs: Date.now(),
+    moves: 0,
+    endFen: "",
+  };
+}
+
+function parseGameResult(resultText) {
+  if (!resultText || !resultText.includes("STOPPED")) return null;
+
+  const parts = resultText.split("|");
+  const info = {};
+  for (const part of parts) {
+    const kv = part.split("=");
+    if (kv.length === 2) {
+      info[kv[0]] = kv[1];
+    }
+  }
+
+  return {
+    moves: parseInt(info.moves, 10) || 0,
+    timeStr: info.time || "0m0s",
+    fen: info.fen || "",
+  };
+}
+
+function updateGamesCount() {
+  if (!els.gamesCount) return;
+  try {
+    const stored = localStorage.getItem(DB_KEY);
+    const games = stored ? JSON.parse(stored) : [];
+    els.gamesCount.textContent = String(games.length);
+  } catch (e) {
+    els.gamesCount.textContent = "0";
+  }
+}
+
+function finishGameRecording(resultText, fallbackFen) {
+  if (!currentGame) return;
+
+  const parsed = parseGameResult(resultText);
+  if (!parsed) {
+    currentGame = null;
+    return;
+  }
+
+  let result = "draw";
+  if (parsed.fen) {
+    const decoded = decodeFEN(parsed.fen);
+    if (decoded) {
+      if (decoded.side === "w") result = "black";
+      else if (decoded.side === "b") result = "white";
+    }
+  }
+
+  const finalFen = parsed.fen || fallbackFen || "";
+  const fenTrail = fenHistory.map((fen, idx) => {
+    const parsedFen = decodeFEN(fen);
+    return {
+      index: idx + 1,
+      moveNumber: Math.floor(idx / 2) + 1,
+      sideToMove: parsedFen ? parsedFen.side : "-",
+      fen: fen,
+      timestamp: fenTimestamps[idx] ? new Date(fenTimestamps[idx]).toISOString() : "",
+    };
+  });
+
+  try {
+    const stored = localStorage.getItem(DB_KEY);
+    const existing = stored ? JSON.parse(stored) : [];
+    existing.push({
+      id: Date.now(),
+      gameNumber: existing.length + 1,
+      playedAt: new Date().toISOString(),
+      result: result,
+      moves: parsed.moves,
+      timeStr: parsed.timeStr,
+      endFen: finalFen,
+      fenTrail: fenTrail,
+    });
+    localStorage.setItem(DB_KEY, JSON.stringify(existing));
+    updateGamesCount();
+  } catch (err) {
+    console.error("DB save failed:", err);
+  }
+
+  currentGame = null;
+}
+
 els.btnScan.addEventListener("click", async () => {
   try {
     if (connected) {
@@ -954,6 +1049,7 @@ window.addEventListener("pointerdown", ensureAudioContext, { once: true });
 
 renderLabels();
 renderBoardFromFen(DEFAULT_START_FEN, { silent: true });
+updateGamesCount();
 startUiTick();
 updateStatus();
 setMessage("Click Scan + Connect to start.");

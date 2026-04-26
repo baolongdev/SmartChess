@@ -22,6 +22,7 @@
           <span id="bleStatus" class="pill disconnected">Disconnected</span>
           <span id="sessionStatus" class="pill off">Session Off</span>
           <span id="deviceName" class="pill pill-blue">Device: -</span>
+          <a href="games.html" id="gamesLink" class="pill pill-purple">Games: <span id="gamesCount">0</span></a>
         </div>
       </header>
 
@@ -53,11 +54,11 @@
         </div>
 
         <div class="board-nav">
-          <button id="btnFirst" class="btn-nav" title="First position" aria-label="First position">⏮</button>
-          <button id="btnPrev" class="btn-nav" title="Previous position" aria-label="Previous position">◀</button>
+          <button id="btnFirst" class="btn-nav" title="First position">⏮</button>
+          <button id="btnPrev" class="btn-nav" title="Previous position">◀</button>
           <span id="counter" class="nav-info">0 / 0</span>
-          <button id="btnNext" class="btn-nav" title="Next position" aria-label="Next position">▶</button>
-          <button id="btnLast" class="btn-nav" title="Last position" aria-label="Last position">⏭</button>
+          <button id="btnNext" class="btn-nav" title="Next position">▶</button>
+          <button id="btnLast" class="btn-nav" title="Last position">⏭</button>
         </div>
       </section>
 
@@ -79,11 +80,11 @@
               <div class="meta-row"><span class="k">castling:</span><span id="infoCastling" class="v">-</span></div>
               <div class="meta-row"><span class="k">en-passant:</span><span id="infoEP" class="v">-</span></div>
               <div class="meta-row"><span class="k">move:</span><span id="infoMove" class="v">-</span></div>
-              <div class="meta-row"><span class="k">turn timer:</span><span id="infoTurnTimer" class="v">00:00</span></div>
-              <div class="meta-row"><span class="k">session:</span><span id="infoSessionTimer" class="v">00:00</span></div>
+              <div class="meta-row"><span class="k">turn timer:</span><span id="infoTurnTimer" class="v">00:00.000</span></div>
+              <div class="meta-row"><span class="k">session:</span><span id="infoSessionTimer" class="v">00:00.000</span></div>
               <div class="meta-row"><span class="k">positions:</span><span id="infoPositions" class="v">0</span></div>
-              <div class="meta-row"><span class="k">avg/position:</span><span id="infoAvgMove" class="v">00:00</span></div>
-              <div class="meta-row"><span class="k">last delta:</span><span id="infoLastDelta" class="v">00:00</span></div>
+              <div class="meta-row"><span class="k">avg/position:</span><span id="infoAvgMove" class="v">00:00.000</span></div>
+              <div class="meta-row"><span class="k">last delta:</span><span id="infoLastDelta" class="v">00:00.000</span></div>
             </div>
           </div>
         </section>
@@ -97,18 +98,6 @@
             </div>
           </div>
           <div id="fenList" class="fen-list"></div>
-        </section>
-
-        <section class="r-section">
-          <div class="sec-head">
-            <span class="sec-title c-a">cmd_protocol</span>
-            <span class="sec-meta">// START / STOP with ACK</span>
-          </div>
-          <div class="proto-box" id="protoBox">
-            <div class="proto-line"><span class="k">cmd_char:</span> <span class="v">3f0e0003-70a1-4f8a-a6a3-51e9590e9f20</span></div>
-            <div class="proto-line"><span class="k">log_char:</span> <span class="v">3f0e0004-70a1-4f8a-a6a3-51e9590e9f20</span></div>
-            <div class="proto-line"><span class="k">flow:</span> <span class="v">WEB -> WRITE START/STOP -> ACK -> LOG</span></div>
-          </div>
         </section>
 
         <section class="r-section">

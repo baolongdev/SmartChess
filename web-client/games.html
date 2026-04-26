@@ -1,0 +1,978 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>SmartChess - Game History</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .page-title {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .page-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-areas:
+        "total total total total"
+        "white draw draw black"
+        "progress progress progress progress"
+        "moves avg time rate";
+      gap: 8px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .stat-card {
+      background: #111821;
+      border: 1px solid #263242;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 6px;
+      min-width: 0;
+      border-radius: 3px;
+    }
+
+    .stat-card .stat-label {
+      font-size: 10px;
+      color: var(--tm);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      line-height: 1.2;
+      white-space: normal;
+    }
+
+    .stat-card .stat-value {
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1;
+      color: #d6deea;
+    }
+
+    .div1 { grid-area: total; }
+    .div2 { grid-area: white; }
+    .div3 { grid-area: draw; }
+    .div4 { grid-area: black; }
+    .div5 { grid-area: moves; }
+    .div6 { grid-area: avg; }
+    .div7 { grid-area: time; }
+    .div8 { grid-area: rate; }
+
+    .result-progress-wrap {
+      grid-area: progress;
+      padding: 2px 0;
+    }
+
+    .result-progress {
+      width: 100%;
+      height: 12px;
+      display: flex;
+      background: #0d131b;
+      border: 1px solid #263242;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .result-progress .seg {
+      width: 0;
+      transition: width 220ms ease;
+    }
+
+    .result-progress .seg-white { background: #7cb6ff; }
+    .result-progress .seg-draw { background: #9ca6b2; }
+    .result-progress .seg-black { background: #ff9690; }
+
+    .result-progress-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 6px;
+      font-size: 10px;
+      color: var(--tm);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    #pctWhite { color: #7cb6ff; }
+    #pctDraw { color: #9ca6b2; }
+    #pctBlack { color: #ff9690; }
+
+    .div1 .stat-value { color: #f2ba74; }
+    .div2 .stat-value { color: #7cb6ff; }
+    .div3 .stat-value { color: #b6bec8; }
+    .div4 .stat-value { color: #ff9690; }
+    .div5 .stat-value { color: #76d9be; }
+    .div6 .stat-value { color: #9ec9ff; }
+    .div7 .stat-value { color: #ffd89f; }
+    .div8 .stat-value { color: #7fd6aa; }
+
+    .div1 .stat-value {
+      font-size: 26px;
+    }
+
+    @media (max-width: 560px) {
+      .stats-grid {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        grid-template-areas:
+          "total total total total total total"
+          "white white draw draw black black"
+          "progress progress progress progress progress progress"
+          "moves moves avg avg time time"
+          "rate rate rate rate rate rate";
+        gap: 6px;
+        padding: 10px 12px;
+      }
+
+      .stat-card {
+        padding: 8px 9px;
+        gap: 4px;
+      }
+
+      .stat-card .stat-label {
+        font-size: 9px;
+        letter-spacing: 0.06em;
+      }
+
+      .stat-card .stat-value {
+        font-size: 18px;
+      }
+
+      .div1 .stat-value {
+        font-size: 22px;
+      }
+
+      .result-progress {
+        height: 10px;
+      }
+
+      .result-progress-meta {
+        margin-top: 5px;
+        font-size: 9px;
+      }
+    }
+
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .filter-bar label {
+      font-size: 12px;
+      color: var(--tm);
+    }
+
+    .filter-bar select,
+    .filter-bar input {
+      background: var(--bg-s);
+      border: 1px solid var(--border);
+      color: var(--tp);
+      padding: 4px 8px;
+      font-size: 12px;
+      font-family: var(--font);
+    }
+
+    .filter-bar select:focus,
+    .filter-bar input:focus {
+      outline: none;
+      border-color: var(--tb);
+    }
+
+    .games-table-wrap {
+      flex: 1 1 auto;
+      overflow: auto;
+      padding: 0;
+    }
+
+    .games-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .games-table th {
+      background: var(--bg-s);
+      padding: 8px 10px;
+      text-align: left;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+
+    .games-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(30, 37, 48, 0.5);
+    }
+
+    .games-table tr:hover {
+      background: rgba(78, 201, 160, 0.04);
+    }
+
+    .games-table .result-cell {
+      font-weight: 600;
+    }
+
+    .games-table .result-cell.white { color: var(--tb); }
+    .games-table .result-cell.black { color: var(--tr); }
+    .games-table .result-cell.draw { color: var(--tm); }
+
+    .games-table .num-cell {
+      color: var(--ta);
+      font-weight: 600;
+    }
+
+    .games-table .time-cell {
+      color: var(--tt);
+    }
+
+    .games-table .fen-cell {
+      font-size: 11px;
+      color: var(--tm);
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .games-table .btn-icon {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--tm);
+      padding: 2px 5px;
+      font-size: 10px;
+      cursor: pointer;
+      margin-right: 4px;
+    }
+
+    .games-table .btn-icon:hover {
+      color: var(--tp);
+      border-color: var(--tp);
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+      color: var(--tm);
+      text-align: center;
+    }
+
+    .empty-state .empty-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    .back-link {
+      color: var(--tb);
+      text-decoration: none;
+      font-size: 12px;
+    }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(8, 12, 18, 0.78);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      padding: 14px;
+    }
+
+    .modal-overlay.show {
+      display: flex;
+    }
+
+    .game-modal {
+      width: min(860px, 96vw);
+      max-height: 88vh;
+      overflow: auto;
+      background: #111821;
+      border: 1px solid #2a3648;
+    }
+
+    .game-modal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid #2a3648;
+      background: #151f2d;
+    }
+
+    .game-modal-title {
+      font-size: 13px;
+      color: var(--tp);
+      font-weight: 600;
+    }
+
+    .game-modal-close {
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--tm);
+      padding: 2px 8px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .game-modal-close:hover {
+      color: var(--tp);
+      border-color: var(--tp);
+    }
+
+    .game-modal-body {
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .detail-row {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 10px;
+      border-bottom: 1px solid rgba(42, 54, 72, 0.6);
+      padding-bottom: 6px;
+    }
+
+    .detail-key {
+      color: var(--tm);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .detail-val {
+      color: var(--tp);
+      font-size: 12px;
+      word-break: break-word;
+    }
+
+    .detail-val.result-white { color: #7cb6ff; }
+    .detail-val.result-black { color: #ff9690; }
+    .detail-val.result-draw { color: #b6bec8; }
+
+    .fen-box {
+      font-family: var(--font);
+      font-size: 11px;
+      line-height: 1.4;
+      background: #0d131b;
+      border: 1px solid #263242;
+      padding: 8px;
+      color: #d6deea;
+      word-break: break-all;
+    }
+
+    .fen-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 6px;
+    }
+
+    .btn-copy-all {
+      border: 1px solid #2a3648;
+      background: #151f2d;
+      color: #9ec9ff;
+      padding: 3px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: var(--font);
+    }
+
+    .btn-copy-all:hover {
+      color: #d6deea;
+      border-color: #4f6a8a;
+    }
+
+    .fen-move-list {
+      display: grid;
+      gap: 6px;
+      max-height: 300px;
+      overflow: auto;
+      margin-top: 6px;
+      padding-right: 2px;
+    }
+
+    .fen-move-item {
+      background: #0d131b;
+      border: 1px solid #263242;
+      padding: 6px 8px;
+      display: grid;
+      gap: 3px;
+    }
+
+    .fen-move-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--tm);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .fen-move-head .move-index {
+      color: #9ec9ff;
+    }
+
+    .fen-move-head .turn-white {
+      color: #7cb6ff;
+    }
+
+    .fen-move-head .turn-black {
+      color: #ff9690;
+    }
+
+    .fen-move-head .turn-unknown {
+      color: #b6bec8;
+    }
+
+    .fen-move-head .move-time {
+      color: #8d98a6;
+    }
+
+    .fen-move-fen {
+      color: #d6deea;
+      font-family: var(--font);
+      font-size: 11px;
+      line-height: 1.35;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <div class="hdr-prompt">
+        <span class="c-g">user[pro]</span><span class="c-m">@</span><span class="c-b">SmartChess</span>
+        <span class="c-m"> $ </span><span class="c-t">games --history</span><span class="cursor"></span>
+      </div>
+      <div class="hdr-sub">// game database management</div>
+      <div class="hdr-pills">
+        <a href="index.html" class="back-link">← board</a>
+      </div>
+    </header>
+
+    <div class="page-actions" style="padding: 10px 16px; border-bottom: 1px solid var(--border);">
+      <button id="btnExportAll" class="btn">export json</button>
+      <button id="btnImport" class="btn">import json</button>
+      <button id="btnClearAll" class="btn" style="color: var(--tr); border-color: var(--tr);">clear all</button>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card div1">
+        <span class="stat-label">Total Games</span>
+        <span class="stat-value" id="statTotal">0</span>
+      </div>
+      <div class="stat-card div2">
+        <span class="stat-label">White Wins</span>
+        <span class="stat-value" id="statWins">0</span>
+      </div>
+      <div class="stat-card div3">
+        <span class="stat-label">Draws</span>
+        <span class="stat-value" id="statDraws">0</span>
+      </div>
+      <div class="stat-card div4">
+        <span class="stat-label">Black Wins</span>
+        <span class="stat-value" id="statLosses">0</span>
+      </div>
+      <div class="result-progress-wrap" id="resultProgressWrap">
+        <div class="result-progress" aria-label="Win/Draw/Loss distribution">
+          <div class="seg seg-white" id="segWhite"></div>
+          <div class="seg seg-draw" id="segDraw"></div>
+          <div class="seg seg-black" id="segBlack"></div>
+        </div>
+        <div class="result-progress-meta">
+          <span id="pctWhite">W 0%</span>
+          <span id="pctDraw">D 0%</span>
+          <span id="pctBlack">B 0%</span>
+        </div>
+      </div>
+      <div class="stat-card div5">
+        <span class="stat-label">Total Moves</span>
+        <span class="stat-value" id="statTotalMoves">0</span>
+      </div>
+      <div class="stat-card div6">
+        <span class="stat-label">Avg Moves/Game</span>
+        <span class="stat-value" id="statAvgMoves">0</span>
+      </div>
+      <div class="stat-card div7">
+        <span class="stat-label">Total Time</span>
+        <span class="stat-value" id="statTotalTime">0s</span>
+      </div>
+      <div class="stat-card div8">
+        <span class="stat-label">Win Rate</span>
+        <span class="stat-value" id="statWinRate">0%</span>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <label>Filter:</label>
+      <select id="filterResult">
+        <option value="all">All Results</option>
+        <option value="white">White Wins</option>
+        <option value="black">Black Wins</option>
+        <option value="draw">Draws</option>
+      </select>
+      <label>Search:</label>
+      <input type="text" id="searchText" placeholder="FEN or date..." />
+      <label>Sort:</label>
+      <select id="sortOrder">
+        <option value="desc">Newest First</option>
+        <option value="asc">Oldest First</option>
+      </select>
+    </div>
+
+    <div class="games-table-wrap">
+      <table class="games-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Date</th>
+            <th>Result</th>
+            <th>Moves</th>
+            <th>Time</th>
+            <th>Final FEN</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="gamesBody">
+        </tbody>
+      </table>
+    </div>
+
+    <div id="emptyState" class="empty-state" style="display: none;">
+      <div class="empty-icon">♟</div>
+      <div>No games recorded yet</div>
+      <div style="font-size: 12px; margin-top: 8px;">Play games from the board interface</div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="gameModalOverlay">
+    <div class="game-modal" role="dialog" aria-modal="true" aria-labelledby="gameModalTitle">
+      <div class="game-modal-head">
+        <div class="game-modal-title" id="gameModalTitle">Game Details</div>
+        <button class="game-modal-close" id="gameModalClose">close</button>
+      </div>
+      <div class="game-modal-body">
+        <div class="detail-row"><div class="detail-key">Game #</div><div class="detail-val" id="modalGameNumber">-</div></div>
+        <div class="detail-row"><div class="detail-key">Played At</div><div class="detail-val" id="modalPlayedAt">-</div></div>
+        <div class="detail-row"><div class="detail-key">Result</div><div class="detail-val" id="modalResult">-</div></div>
+        <div class="detail-row"><div class="detail-key">Moves</div><div class="detail-val" id="modalMoves">-</div></div>
+        <div class="detail-row"><div class="detail-key">Duration</div><div class="detail-val" id="modalTime">-</div></div>
+        <div class="detail-row"><div class="detail-key">Final FEN</div><div class="detail-val"><div class="fen-box" id="modalFen">-</div></div></div>
+        <div class="detail-row"><div class="detail-key">FEN Moves</div><div class="detail-val"><div class="fen-actions"><button id="btnCopyAllFen" class="btn-copy-all">copy all FEN</button></div><div class="fen-move-list" id="modalFenTrail"></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="fileImport" accept=".json" style="display: none;" />
+
+  <script>
+const DB_KEY = "smartchess_games";
+
+let gamesDB = [];
+let filteredGames = [];
+
+const els = {
+  statTotal: document.getElementById("statTotal"),
+  statWins: document.getElementById("statWins"),
+  statLosses: document.getElementById("statLosses"),
+  statDraws: document.getElementById("statDraws"),
+  resultProgressWrap: document.getElementById("resultProgressWrap"),
+  segWhite: document.getElementById("segWhite"),
+  segDraw: document.getElementById("segDraw"),
+  segBlack: document.getElementById("segBlack"),
+  pctWhite: document.getElementById("pctWhite"),
+  pctDraw: document.getElementById("pctDraw"),
+  pctBlack: document.getElementById("pctBlack"),
+  statTotalMoves: document.getElementById("statTotalMoves"),
+  statAvgMoves: document.getElementById("statAvgMoves"),
+  statTotalTime: document.getElementById("statTotalTime"),
+  statWinRate: document.getElementById("statWinRate"),
+  filterResult: document.getElementById("filterResult"),
+  searchText: document.getElementById("searchText"),
+  sortOrder: document.getElementById("sortOrder"),
+  gamesBody: document.getElementById("gamesBody"),
+  emptyState: document.getElementById("emptyState"),
+  btnExportAll: document.getElementById("btnExportAll"),
+  btnImport: document.getElementById("btnImport"),
+  btnClearAll: document.getElementById("btnClearAll"),
+  fileImport: document.getElementById("fileImport"),
+  gameModalOverlay: document.getElementById("gameModalOverlay"),
+  gameModalClose: document.getElementById("gameModalClose"),
+  modalGameNumber: document.getElementById("modalGameNumber"),
+  modalPlayedAt: document.getElementById("modalPlayedAt"),
+  modalResult: document.getElementById("modalResult"),
+  modalMoves: document.getElementById("modalMoves"),
+  modalTime: document.getElementById("modalTime"),
+  modalFen: document.getElementById("modalFen"),
+  modalFenTrail: document.getElementById("modalFenTrail"),
+  btnCopyAllFen: document.getElementById("btnCopyAllFen"),
+};
+
+let currentModalTrail = [];
+
+function loadGames() {
+  try {
+    const data = localStorage.getItem(DB_KEY);
+    gamesDB = data ? JSON.parse(data) : [];
+  } catch (e) {
+    gamesDB = [];
+  }
+  applyFilter();
+}
+
+function saveGames() {
+  try {
+    localStorage.setItem(DB_KEY, JSON.stringify(gamesDB));
+  } catch (e) {
+    console.error("Save failed:", e);
+  }
+}
+
+function parseTimeStr(timeStr) {
+  if (!timeStr) return 0;
+
+  const hms = timeStr.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (hms) {
+    return parseInt(hms[1], 10) * 3600 + parseInt(hms[2], 10) * 60 + parseInt(hms[3], 10);
+  }
+
+  const m = timeStr.match(/(\d+)m(\d+)s/i);
+  if (m) {
+    return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  }
+
+  const secOnly = timeStr.match(/^(\d+)s$/i);
+  if (secOnly) {
+    return parseInt(secOnly[1], 10);
+  }
+
+  return 0;
+}
+
+function formatTime(seconds) {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function applyFilter() {
+  const resultFilter = els.filterResult.value;
+  const search = (els.searchText.value || "").toLowerCase();
+  const sortDesc = els.sortOrder.value === "desc";
+
+  filteredGames = gamesDB.filter(g => {
+    if (resultFilter !== "all" && g.result !== resultFilter) return false;
+    if (search) {
+      const matchFen = g.endFen && g.endFen.toLowerCase().includes(search);
+      const matchDate = g.playedAt && g.playedAt.toLowerCase().includes(search);
+      if (!matchFen && !matchDate) return false;
+    }
+    return true;
+  });
+
+  if (sortDesc) {
+    filteredGames.sort((a, b) => b.id - a.id);
+  } else {
+    filteredGames.sort((a, b) => a.id - b.id);
+  }
+
+  renderStats();
+  renderTable();
+}
+
+function renderStats() {
+  const total = gamesDB.length;
+  const wins = gamesDB.filter(g => g.result === "white").length;
+  const losses = gamesDB.filter(g => g.result === "black").length;
+  const draws = gamesDB.filter(g => g.result === "draw").length;
+  const totalMoves = gamesDB.reduce((sum, g) => sum + (g.moves || 0), 0);
+  const avgMoves = total > 0 ? Math.round(totalMoves / total) : 0;
+  const totalSec = gamesDB.reduce((sum, g) => sum + parseTimeStr(g.timeStr || "0m0s"), 0);
+  const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
+
+  els.statTotal.textContent = String(total);
+  els.statWins.textContent = String(wins);
+  els.statLosses.textContent = String(losses);
+  els.statDraws.textContent = String(draws);
+  els.statTotalMoves.textContent = String(totalMoves);
+  els.statAvgMoves.textContent = String(avgMoves);
+  els.statTotalTime.textContent = formatTime(totalSec);
+  els.statWinRate.textContent = String(winRate) + "%";
+
+  const whitePct = total > 0 ? (wins / total) * 100 : 0;
+  const drawPct = total > 0 ? (draws / total) * 100 : 0;
+  const blackPct = total > 0 ? (losses / total) * 100 : 0;
+
+  if (els.resultProgressWrap) {
+    els.resultProgressWrap.style.display = total > 0 ? "block" : "none";
+  }
+
+  if (els.segWhite) els.segWhite.style.width = `${whitePct}%`;
+  if (els.segDraw) els.segDraw.style.width = `${drawPct}%`;
+  if (els.segBlack) els.segBlack.style.width = `${blackPct}%`;
+  if (els.pctWhite) els.pctWhite.textContent = `W ${Math.round(whitePct)}%`;
+  if (els.pctDraw) els.pctDraw.textContent = `D ${Math.round(drawPct)}%`;
+  if (els.pctBlack) els.pctBlack.textContent = `B ${Math.round(blackPct)}%`;
+}
+
+function formatResultLabel(result) {
+  if (result === "white") return "White win";
+  if (result === "black") return "Black win";
+  if (result === "draw") return "Draw";
+  return "-";
+}
+
+function showGameModal(game) {
+  if (!game || !els.gameModalOverlay) return;
+
+  const date = game.playedAt
+    ? new Date(game.playedAt).toLocaleString("en-GB", {
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    })
+    : "-";
+
+  const resultLabel = formatResultLabel(game.result);
+  els.modalGameNumber.textContent = `#${game.gameNumber}`;
+  els.modalPlayedAt.textContent = date;
+  els.modalResult.textContent = resultLabel;
+  els.modalResult.className = `detail-val result-${game.result || "draw"}`;
+  els.modalMoves.textContent = String(game.moves ?? "-");
+  els.modalTime.textContent = game.timeStr || "-";
+  els.modalFen.textContent = game.endFen || "-";
+
+  const trail = Array.isArray(game.fenTrail) ? game.fenTrail : [];
+  currentModalTrail = trail;
+  if (els.modalFenTrail) {
+    if (trail.length === 0) {
+      els.modalFenTrail.innerHTML = '<div class="fen-move-item"><div class="fen-move-fen">No per-move FEN data available for this game.</div></div>';
+    } else {
+      els.modalFenTrail.innerHTML = trail.map(step => {
+        const side = step.sideToMove === "w" ? "White" : step.sideToMove === "b" ? "Black" : "-";
+        const sideClass = step.sideToMove === "w" ? "turn-white" : step.sideToMove === "b" ? "turn-black" : "turn-unknown";
+        const ts = step.timestamp ? new Date(step.timestamp).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "-";
+        return `
+          <div class="fen-move-item">
+            <div class="fen-move-head">
+              <span class="move-index">#${step.index} · move ${step.moveNumber}</span>
+              <span class="${sideClass}">turn ${side}</span>
+              <span class="move-time">${ts}</span>
+            </div>
+            <div class="fen-move-fen">${step.fen}</div>
+          </div>
+        `;
+      }).join("");
+    }
+  }
+
+  els.gameModalOverlay.classList.add("show");
+}
+
+function hideGameModal() {
+  if (els.gameModalOverlay) {
+    els.gameModalOverlay.classList.remove("show");
+  }
+  currentModalTrail = [];
+}
+
+function renderTable() {
+  if (filteredGames.length === 0) {
+    els.gamesBody.innerHTML = "";
+    els.emptyState.style.display = "flex";
+    return;
+  }
+
+  els.emptyState.style.display = "none";
+
+  els.gamesBody.innerHTML = filteredGames.map((g, idx) => {
+    const date = new Date(g.playedAt).toLocaleString("en-GB", {
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+    const resultLabel = formatResultLabel(g.result);
+
+    return `
+      <tr data-id="${g.id}">
+        <td class="num-cell">#${g.gameNumber}</td>
+        <td>${date}</td>
+        <td class="result-cell ${g.result}">${resultLabel}</td>
+        <td>${g.moves}</td>
+        <td class="time-cell">${g.timeStr}</td>
+        <td class="fen-cell" title="${g.endFen || ""}">${g.endFen ? g.endFen.substring(0, 40) + "..." : "-"}</td>
+        <td><button class="btn-icon" data-view-index="${idx}">view</button></td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function clearAllGames() {
+  if (!confirm("Clear ALL game history? This cannot be undone.")) return;
+  gamesDB = [];
+  saveGames();
+  applyFilter();
+}
+
+function exportAll() {
+  if (gamesDB.length === 0) {
+    alert("No games to export");
+    return;
+  }
+
+  const data = {
+    exported_at: new Date().toISOString(),
+    total_games: gamesDB.length,
+    games: gamesDB,
+  };
+
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  a.href = url;
+  a.download = `smartchess-games-${ts}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function importAll(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!data.games || !Array.isArray(data.games)) {
+        alert("Invalid format");
+        return;
+      }
+
+      const count = data.games.length;
+      if (!confirm(`Import ${count} games? This will add to existing ${gamesDB.length} games.`)) return;
+
+      let startNum = gamesDB.length;
+      data.games.forEach(g => {
+        gamesDB.push({
+          ...g,
+          id: Date.now() + Math.floor(Math.random() * 1000000),
+          gameNumber: ++startNum,
+        });
+      });
+
+      saveGames();
+      applyFilter();
+      alert(`Imported ${count} games`);
+    } catch (err) {
+      alert("Parse failed: " + err.message);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = "";
+}
+
+els.filterResult.addEventListener("change", applyFilter);
+els.searchText.addEventListener("input", applyFilter);
+els.sortOrder.addEventListener("change", applyFilter);
+
+els.gamesBody.addEventListener("click", (e) => {
+  const viewBtn = e.target.closest("[data-view-index]");
+  const viewIndex = viewBtn ? Number(viewBtn.dataset.viewIndex) : -1;
+  if (viewIndex >= 0) {
+    const game = filteredGames[viewIndex];
+    if (game) {
+      showGameModal(game);
+    }
+  }
+});
+
+if (els.gameModalClose) {
+  els.gameModalClose.addEventListener("click", hideGameModal);
+}
+
+if (els.gameModalOverlay) {
+  els.gameModalOverlay.addEventListener("click", (e) => {
+    if (e.target === els.gameModalOverlay) {
+      hideGameModal();
+    }
+  });
+}
+
+if (els.btnCopyAllFen) {
+  els.btnCopyAllFen.addEventListener("click", async () => {
+    try {
+      if (!currentModalTrail.length) {
+        await navigator.clipboard.writeText(els.modalFen ? (els.modalFen.textContent || "") : "");
+        alert("Copied final FEN");
+        return;
+      }
+
+      const text = currentModalTrail
+        .map(step => step.fen)
+        .join("\n");
+      await navigator.clipboard.writeText(text);
+      alert("Copied all FEN moves");
+    } catch (err) {
+      alert("Copy failed: " + (err && err.message ? err.message : String(err)));
+    }
+  });
+}
+
+els.btnExportAll.addEventListener("click", exportAll);
+els.btnImport.addEventListener("click", () => els.fileImport.click());
+els.fileImport.addEventListener("change", importAll);
+els.btnClearAll.addEventListener("click", clearAllGames);
+
+loadGames();
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (els.gameModalOverlay && els.gameModalOverlay.classList.contains("show")) {
+      hideGameModal();
+    } else {
+      window.location.href = "index.html";
+    }
+  }
+});
+  </script>
+</body>
+</html>

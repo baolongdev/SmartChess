@@ -75,6 +75,9 @@ static String lastFenSent = "";
 static unsigned long lastBleKeepAliveMs = 0;
 constexpr unsigned long BLE_KEEPALIVE_MS = 1500;
 
+static unsigned long gameStartTimeMs = 0;
+static int totalMovesCount = 0;
+
 static String cmdBuffer = "";
 static unsigned long cmdLastByteMs = 0;
 constexpr unsigned long CMD_COMMIT_IDLE_MS = 120;
@@ -353,6 +356,8 @@ static bool startAndLearnInitial32() {
   resetTrackingState();
   gameStarted = true;
   startFailDetail = "";
+  gameStartTimeMs = millis();
+  totalMovesCount = 0;
 
   Serial.println(F("[START] Du 32 quan. Bat dau tracking."));
   bleFenLog(String("[READY] STARTED | pieces=32"));
@@ -824,6 +829,7 @@ static void handleVerify() {
 
   if (verifyCount >= VERIFY_ROUNDS) {
     if (applyMove(liftedFromIdx, liftedToIdx, liftedUID)) {
+      totalMovesCount++;
       resetTrackingState();
       bleFenLog(String("[OK] MOVE_CONFIRMED"));
     } else {
@@ -934,8 +940,27 @@ static bool handleBleCommand(const String &raw, String &response) {
   if (cmd == "STOP") {
     gameStarted = false;
     abortTrackingRestoreSource();
-    response = "STOPPED";
-    bleFenLog(String("[INFO] STOPPED"));
+
+    unsigned long gameDurationMs = 0;
+    if (gameStartTimeMs > 0) {
+      gameDurationMs = millis() - gameStartTimeMs;
+    }
+    int mins = (gameDurationMs / 60000);
+    int secs = (gameDurationMs / 1000) % 60;
+
+    String result = "STOPPED";
+    result += "|moves=";
+    result += String(totalMovesCount);
+    result += "|time=";
+    result += String(mins);
+    result += "m";
+    result += String(secs);
+    result += "s";
+    result += "|fen=";
+    result += buildCurrentFen();
+
+    response = result;
+    bleFenLog(String("[INFO] STOPPED moves=") + String(totalMovesCount) + String(" time=") + String(mins) + String("m") + String(secs) + String("s"));
     return true;
   }
 
