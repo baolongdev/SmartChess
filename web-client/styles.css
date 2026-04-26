@@ -453,6 +453,18 @@ textarea {
   background: rgba(227, 160, 79, 0.08);
 }
 
+#btnResign {
+  color: #ff9d9d;
+  border-color: rgba(255, 125, 125, 0.45);
+  background: rgba(255, 125, 125, 0.1);
+}
+
+#btnDraw {
+  color: #c7cfd8;
+  border-color: rgba(199, 207, 216, 0.4);
+  background: rgba(199, 207, 216, 0.08);
+}
+
 .message {
   min-height: 24px;
   padding: 8px 16px 6px;
@@ -956,6 +968,68 @@ textarea {
   border-color: var(--tb);
   background: rgba(10, 17, 27, 0.96);
   color: #d5e8ff;
+}
+
+.resign-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 12, 18, 0.78);
+  z-index: 180;
+  padding: 14px;
+}
+
+.resign-overlay.show {
+  display: flex;
+}
+
+.resign-dialog {
+  width: min(92vw, 430px);
+  border: 1px solid var(--border);
+  background: #0f1720;
+  padding: 14px;
+}
+
+.resign-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--tp);
+}
+
+.resign-sub {
+  margin-top: 6px;
+  color: var(--tm);
+  font-size: 12px;
+}
+
+.resign-actions {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.resign-actions .btn {
+  width: 100%;
+}
+
+.resign-actions .btn-resign-black {
+  color: #ff8f8f;
+  border-color: rgba(255, 98, 98, 0.55);
+  background: rgba(255, 98, 98, 0.12);
+}
+
+.resign-actions .btn-resign-black:hover {
+  color: #ffd0d0;
+  border-color: rgba(255, 140, 140, 0.8);
+}
+
+.resign-foot {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .view-panel header {

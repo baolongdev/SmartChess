@@ -693,6 +693,18 @@ function formatTime(seconds) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function formatClockWithMs(isoTime) {
+  if (!isoTime) return "-";
+  const d = new Date(isoTime);
+  if (Number.isNaN(d.getTime())) return "-";
+
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  const mmm = String(d.getMilliseconds()).padStart(3, "0");
+  return `${hh}:${mm}:${ss}.${mmm}`;
+}
+
 function applyFilter() {
   const resultFilter = els.filterResult.value;
   const search = (els.searchText.value || "").toLowerCase();
@@ -788,7 +800,7 @@ function showGameModal(game) {
       els.modalFenTrail.innerHTML = trail.map(step => {
         const side = step.sideToMove === "w" ? "White" : step.sideToMove === "b" ? "Black" : "-";
         const sideClass = step.sideToMove === "w" ? "turn-white" : step.sideToMove === "b" ? "turn-black" : "turn-unknown";
-        const ts = step.timestamp ? new Date(step.timestamp).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "-";
+        const ts = formatClockWithMs(step.timestamp);
         return `
           <div class="fen-move-item">
             <div class="fen-move-head">

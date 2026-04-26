@@ -26,6 +26,8 @@ const BTN_LABELS = {
   disconnect: "disconnect",
   start: "start",
   stop: "stop",
+  resign: "resign",
+  draw: "draw",
   clear: "clear history",
   flip: "flip board",
 };
@@ -53,6 +55,8 @@ let uiTick = null;
 let audioCtx = null;
 let wheelLockUntilMs = 0;
 let lastRenderedFen = null;
+let resignActionPending = false;
+let wrongTurnAlarmTimer = null;
 const textDecoder = new TextDecoder();
 let webLogCount = 0;
 let toastTimer = null;
@@ -69,6 +73,8 @@ const els = {
 
   btnScan: document.getElementById("btnScan"),
   btnStart: document.getElementById("btnStart"),
+  btnResign: document.getElementById("btnResign"),
+  btnDraw: document.getElementById("btnDraw"),
   btnClear: document.getElementById("btnClear"),
   btnFlip: document.getElementById("btnFlip"),
   btnCopyFen: document.getElementById("btnCopyFen"),
@@ -91,6 +97,10 @@ const els = {
   logList: document.getElementById("logList"),
   logCount: document.getElementById("logCount"),
   toast: document.getElementById("toast"),
+  resignModal: document.getElementById("resignModal"),
+  btnResignWhite: document.getElementById("btnResignWhite"),
+  btnResignBlack: document.getElementById("btnResignBlack"),
+  btnResignCancel: document.getElementById("btnResignCancel"),
   counter: document.getElementById("counter"),
   currentFen: document.getElementById("currentFen"),
 
@@ -129,6 +139,18 @@ function showToast(text, level = "err") {
   toastTimer = window.setTimeout(() => {
     els.toast.classList.remove("show");
   }, 2600);
+}
+
+function openResignModal() {
+  if (!els.resignModal) return;
+  els.resignModal.classList.add("show");
+  els.resignModal.setAttribute("aria-hidden", "false");
+}
+
+function closeResignModal() {
+  if (!els.resignModal) return;
+  els.resignModal.classList.remove("show");
+  els.resignModal.setAttribute("aria-hidden", "true");
 }
 
 function prettifyCmdError(ackText) {
@@ -296,6 +318,13 @@ function onDeviceLogNotify(event) {
   const level = /ERR|FAILED|UNKNOWN|NO_GAME|START_FAILED|NO_ACK/i.test(line) ? "err" : "info";
   addLogLine(level, line);
 
+  if (/WRONG_TURN/i.test(line)) {
+    startWrongTurnAlarm();
+  }
+  if (/MOVE_CONFIRMED|RETURNED_SOURCE|FALLBACK_RETURN_SOURCE|STOPPED|STARTED/i.test(line)) {
+    stopWrongTurnAlarm();
+  }
+
   if (level === "err") {
     if (/START_FAILED:MISSING_PIECES:/i.test(line)) {
       const detail = line.split("START_FAILED:MISSING_PIECES:")[1] || "";
@@ -354,6 +383,52 @@ function playFenChangeSound() {
   }
 }
 
+function playWrongTurnAlarmPulse() {
+  const ctx = ensureAudioContext();
+  if (!ctx) return;
+
+  const play = () => {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(980, now);
+    osc.frequency.exponentialRampToValueAtTime(720, now + 0.24);
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.06, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.26);
+  };
+
+  if (ctx.state === "suspended") {
+    ctx.resume().then(play).catch(() => {
+    });
+    return;
+  }
+
+  if (ctx.state === "running") {
+    play();
+  }
+}
+
+function startWrongTurnAlarm() {
+  if (wrongTurnAlarmTimer !== null) return;
+  playWrongTurnAlarmPulse();
+  wrongTurnAlarmTimer = window.setInterval(playWrongTurnAlarmPulse, 650);
+}
+
+function stopWrongTurnAlarm() {
+  if (wrongTurnAlarmTimer === null) return;
+  window.clearInterval(wrongTurnAlarmTimer);
+  wrongTurnAlarmTimer = null;
+}
+
 function onBoardWheel(e) {
   if (fenHistory.length === 0) return;
 
@@ -392,6 +467,13 @@ function formatDuration(ms) {
     return `${String(hours).padStart(2, "0")}:${mm}:${ss}.${mmm}`;
   }
   return `${mm}:${ss}.${mmm}`;
+}
+
+function formatCompactDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m${seconds}s`;
 }
 
 function getSessionElapsedMs(now = Date.now()) {
@@ -434,6 +516,8 @@ function syncActionButtons() {
   setBtnCheckedText(els.btnStart, sessionOn ? BTN_LABELS.stop : BTN_LABELS.start, sessionOn);
   els.btnStart.classList.toggle("btn-start", !sessionOn);
   els.btnStart.classList.toggle("btn-end", sessionOn);
+  setBtnCheckedText(els.btnResign, BTN_LABELS.resign, false);
+  setBtnCheckedText(els.btnDraw, BTN_LABELS.draw, false);
   setBtnCheckedText(els.btnClear, BTN_LABELS.clear, false);
   setBtnCheckedText(els.btnFlip, BTN_LABELS.flip, flipped);
 }
@@ -447,6 +531,8 @@ function updateStatus() {
 
   els.btnScan.disabled = cmdInFlight;
   els.btnStart.disabled = !connected || cmdInFlight;
+  els.btnResign.disabled = !connected || !sessionOn || cmdInFlight;
+  els.btnDraw.disabled = !connected || !sessionOn || cmdInFlight;
 
   syncActionButtons();
   updateStatsUI();
@@ -627,6 +713,7 @@ async function connectBle() {
   });
 
   bleDisconnectHandler = () => {
+    stopWrongTurnAlarm();
     connected = false;
     sessionOn = false;
     sessionStartMs = null;
@@ -687,6 +774,8 @@ async function connectBle() {
 }
 
 async function disconnectBle() {
+  stopWrongTurnAlarm();
+
   if (fenCharacteristic) {
     try {
       fenCharacteristic.removeEventListener("characteristicvaluechanged", onFenNotify);
@@ -732,6 +821,8 @@ async function disconnectBle() {
 }
 
 async function startSession() {
+  stopWrongTurnAlarm();
+
   let ack = "";
   if (cmdCharacteristic) {
     ack = await sendDeviceCommand("START");
@@ -765,7 +856,9 @@ async function startSession() {
   setMessage(ack ? `START sent (${ack})` : "START sent to board");
 }
 
-async function endSession() {
+async function endSession(endOverride = null) {
+  stopWrongTurnAlarm();
+
   let ack = "";
   if (cmdCharacteristic) {
     ack = await sendDeviceCommand("STOP");
@@ -783,11 +876,23 @@ async function endSession() {
   }
 
   const finalFen = (els.currentFen.textContent || "").trim();
-  finishGameRecording(ack, finalFen);
+  finishGameRecording(ack, finalFen, endOverride);
 
   sessionOn = false;
   updateStatus();
   resetBoardUiToDefault();
+
+  if (endOverride?.endType === "resign") {
+    const sideLabel = endOverride.resignSide === "black" ? "Black" : "White";
+    setMessage(`${sideLabel} resigned. Game saved.`);
+    return;
+  }
+
+  if (endOverride?.endType === "draw") {
+    setMessage("Draw agreed. Game saved.");
+    return;
+  }
+
   setMessage(ack ? `STOP sent (${ack})` : "STOP sent to board");
 }
 
@@ -916,14 +1021,21 @@ function startGameRecording() {
 }
 
 function parseGameResult(resultText) {
-  if (!resultText || !resultText.includes("STOPPED")) return null;
+  if (!resultText) return null;
 
-  const parts = resultText.split("|");
+  const normalized = resultText.replace(/^OK:\s*/i, "").trim();
+  if (!normalized.startsWith("STOPPED")) return null;
+
+  const parts = normalized.split("|");
   const info = {};
   for (const part of parts) {
-    const kv = part.split("=");
-    if (kv.length === 2) {
-      info[kv[0]] = kv[1];
+    const eqIndex = part.indexOf("=");
+    if (eqIndex > 0) {
+      const key = part.slice(0, eqIndex).trim();
+      const value = part.slice(eqIndex + 1).trim();
+      if (key) {
+        info[key] = value;
+      }
     }
   }
 
@@ -934,28 +1046,40 @@ function parseGameResult(resultText) {
   };
 }
 
-function updateGamesCount() {
-  if (!els.gamesCount) return;
+function readGamesDb() {
   try {
     const stored = localStorage.getItem(DB_KEY);
-    const games = stored ? JSON.parse(stored) : [];
-    els.gamesCount.textContent = String(games.length);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.games)) return parsed.games;
+    return [];
   } catch (e) {
-    els.gamesCount.textContent = "0";
+    return [];
   }
 }
 
-function finishGameRecording(resultText, fallbackFen) {
-  if (!currentGame) return;
+function updateGamesCount() {
+  if (!els.gamesCount) return;
+  const games = readGamesDb();
+  els.gamesCount.textContent = String(games.length);
+}
 
+function finishGameRecording(resultText, fallbackFen, endOverride = null) {
   const parsed = parseGameResult(resultText);
-  if (!parsed) {
-    currentGame = null;
-    return;
-  }
 
+  let endType = "stop";
   let result = "draw";
-  if (parsed.fen) {
+  let resignSide = "";
+
+  if (endOverride?.endType === "resign") {
+    endType = "resign";
+    resignSide = endOverride.resignSide === "black" ? "black" : "white";
+    result = resignSide === "white" ? "black" : "white";
+  } else if (endOverride?.endType === "draw") {
+    endType = "draw";
+    result = "draw";
+  } else if (parsed?.fen) {
     const decoded = decodeFEN(parsed.fen);
     if (decoded) {
       if (decoded.side === "w") result = "black";
@@ -963,7 +1087,11 @@ function finishGameRecording(resultText, fallbackFen) {
     }
   }
 
-  const finalFen = parsed.fen || fallbackFen || "";
+  const finalFen = parsed?.fen || fallbackFen || fenHistory[fenHistory.length - 1] || "";
+  const elapsedMs = getSessionElapsedMs();
+  const moves = parsed?.moves ?? Math.max(0, fenHistory.length - 1);
+  const timeStr = parsed?.timeStr || formatCompactDuration(elapsedMs);
+
   const fenTrail = fenHistory.map((fen, idx) => {
     const parsedFen = decodeFEN(fen);
     return {
@@ -976,15 +1104,16 @@ function finishGameRecording(resultText, fallbackFen) {
   });
 
   try {
-    const stored = localStorage.getItem(DB_KEY);
-    const existing = stored ? JSON.parse(stored) : [];
+    const existing = readGamesDb();
     existing.push({
       id: Date.now(),
       gameNumber: existing.length + 1,
       playedAt: new Date().toISOString(),
       result: result,
-      moves: parsed.moves,
-      timeStr: parsed.timeStr,
+      endType: endType,
+      resignSide: resignSide,
+      moves: moves,
+      timeStr: timeStr,
       endFen: finalFen,
       fenTrail: fenTrail,
     });
@@ -995,6 +1124,32 @@ function finishGameRecording(resultText, fallbackFen) {
   }
 
   currentGame = null;
+}
+
+async function resignSession(resignSide) {
+  if (resignActionPending) return;
+  if (resignSide !== "white" && resignSide !== "black") return;
+
+  resignActionPending = true;
+  const winner = resignSide === "white" ? "black" : "white";
+  try {
+    addLogLine("warn", `[GAME] ${resignSide.toUpperCase()} resigned`);
+    await endSession({
+      endType: "resign",
+      resignSide,
+    });
+    addLogLine("ok", `[GAME] ${winner.toUpperCase()} wins by resignation`);
+  } finally {
+    resignActionPending = false;
+  }
+}
+
+async function drawSession() {
+  const agreed = window.confirm("Confirm draw? The game will be stopped and saved as draw.");
+  if (!agreed) return;
+
+  addLogLine("info", "[GAME] Draw agreed");
+  await endSession({ endType: "draw" });
 }
 
 els.btnScan.addEventListener("click", async () => {
@@ -1021,6 +1176,56 @@ els.btnStart.addEventListener("click", async () => {
   }
 });
 
+els.btnResign.addEventListener("click", async () => {
+  try {
+    openResignModal();
+  } catch (e) {
+    setMessage(e.message || String(e), true);
+  }
+});
+
+els.btnDraw.addEventListener("click", async () => {
+  try {
+    await drawSession();
+  } catch (e) {
+    setMessage(e.message || String(e), true);
+  }
+});
+
+if (els.btnResignWhite) {
+  els.btnResignWhite.addEventListener("click", async () => {
+    closeResignModal();
+    try {
+      await resignSession("white");
+    } catch (e) {
+      setMessage(e.message || String(e), true);
+    }
+  });
+}
+
+if (els.btnResignBlack) {
+  els.btnResignBlack.addEventListener("click", async () => {
+    closeResignModal();
+    try {
+      await resignSession("black");
+    } catch (e) {
+      setMessage(e.message || String(e), true);
+    }
+  });
+}
+
+if (els.btnResignCancel) {
+  els.btnResignCancel.addEventListener("click", closeResignModal);
+}
+
+if (els.resignModal) {
+  els.resignModal.addEventListener("click", (e) => {
+    if (e.target === els.resignModal) {
+      closeResignModal();
+    }
+  });
+}
+
 els.btnClear.addEventListener("click", clearHistory);
 els.btnFlip.addEventListener("click", flipBoard);
 els.btnCopyFen.addEventListener("click", copyFen);
@@ -1034,6 +1239,11 @@ els.btnNext.addEventListener("click", goNext);
 els.btnLast.addEventListener("click", goLast);
 
 window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeResignModal();
+    return;
+  }
+
   ensureAudioContext();
 
   if (e.key === "ArrowLeft") goPrev();

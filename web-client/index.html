@@ -29,6 +29,8 @@
       <section id="actionbar">
         <button id="btnScan" class="btn btn-scan">[ ] scan + connect</button>
         <button id="btnStart" class="btn btn-start" disabled>[ ] start</button>
+        <button id="btnResign" class="btn" disabled>[ ] resign</button>
+        <button id="btnDraw" class="btn" disabled>[ ] draw</button>
         <button id="btnClear" class="btn">[ ] clear history</button>
         <button id="btnFlip" class="btn">[ ] flip board</button>
       </section>
@@ -112,6 +114,20 @@
   </div>
 
   <div id="toast" class="toast"></div>
+
+  <div id="resignModal" class="resign-overlay" aria-hidden="true">
+    <div class="resign-dialog" role="dialog" aria-modal="true" aria-labelledby="resignTitle">
+      <div class="resign-title" id="resignTitle">Who resigns?</div>
+      <div class="resign-sub">Choose White or Black. The game will stop and be saved.</div>
+      <div class="resign-actions">
+        <button id="btnResignWhite" class="btn btn-start">White resigns</button>
+        <button id="btnResignBlack" class="btn btn-end btn-resign-black">Black resigns</button>
+      </div>
+      <div class="resign-foot">
+        <button id="btnResignCancel" class="btn">cancel</button>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>
