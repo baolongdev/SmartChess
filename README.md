@@ -168,7 +168,18 @@ All CMD responses follow a strict `OK:` / `ERR:` prefix:
 | `STOP` | `OK: STOPPED` | — |
 | `STATUS` | `OK: RUNNING` or `OK: IDLE` | — |
 | `F` / `FEN` | `OK: <fen-string>` | `ERR: NO_GAME` |
+| `CFG_GET` | `OK: CFG|ver=...|verbose=...|continuous=...|letters=...` | — |
+| `CFG_SET|VER=..|VERBOSE=..|CONTINUOUS=..|LETTERS=..` | `OK: CFG_SAVED|...` | `ERR: CFG_ERR:...` |
+| `WIFI_GET` | `OK: WIFI|ver=...|ssid=...|status=...|ip=...` | — |
+| `WIFI_SET|SSID=...|PASS=...|AUTO=1|CONNECT=1` | `OK: WIFI_SAVED|...` | `ERR: WIFI_ERR:...` |
+| `WIFI_SCAN` | `OK: WIFI_SCAN|count=n|ssid0=...` | `ERR: WIFI_ERR:SCAN` |
+| `WIFI_CONNECT` / `WIFI_DISCONNECT` | `OK: WIFI_CONNECTING|...` / `OK: WIFI_DISCONNECTED|...` | `ERR: WIFI_ERR:...` |
+| `LICHESS_PUBLISH` | `OK: LICHESS_QUEUED|state=QUEUED|ply=n` | `ERR: LICHESS_ERR:...` |
+| `LICHESS_STATUS` | `OK: LICHESS|state=...|url=...|err=...` | — |
+| `LICHESS_STREAM_ON` / `LICHESS_STREAM_OFF` | `OK: LICHESS_STREAM_ON|...` / `OK: LICHESS_STREAM_OFF|...` | — |
 | *(other)* | — | `ERR: UNKNOWN_CMD` |
+
+When Wi-Fi is connected, Lichess publish is streamed automatically after each confirmed move (default ON), and the latest full movelist is re-pushed if new moves arrive during an active upload.
 
 ### FEN Keepalive
 

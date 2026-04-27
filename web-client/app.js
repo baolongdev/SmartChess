@@ -4,7 +4,9 @@ const FEN_CHAR_UUID = "3f0e0002-70a1-4f8a-a6a3-51e9590e9f20";
 const CMD_CHAR_UUID = "3f0e0003-70a1-4f8a-a6a3-51e9590e9f20";
 const LOG_CHAR_UUID = "3f0e0004-70a1-4f8a-a6a3-51e9590e9f20";
 const DB_KEY = "smartchess_games";
+const SETTINGS_DB_KEY = "smartchess_settings";
 const DEFAULT_START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+const LICHESS_POLL_TIMEOUT_MS = 45000;
 
 const PIECE_UNICODE = {
   P: "♙",
@@ -64,6 +66,11 @@ let cmdAckPending = null;
 let cmdInFlight = false;
 let disconnectIntentional = false;
 let bleDisconnectHandler = null;
+let pendingLichessGameId = null;
+let pendingLichessStartedMs = 0;
+let lichessPollActive = false;
+let hasSessionStarted = false;
+let currentSessionGameId = null;
 
 const els = {
   bleStatus: document.getElementById("bleStatus"),
@@ -78,6 +85,8 @@ const els = {
   btnClear: document.getElementById("btnClear"),
   btnFlip: document.getElementById("btnFlip"),
   btnCopyFen: document.getElementById("btnCopyFen"),
+  btnOpenLichess: document.getElementById("btnOpenLichess"),
+  btnCopyLichess: document.getElementById("btnCopyLichess"),
   btnExportFen: document.getElementById("btnExportFen"),
 
   btnFirst: document.getElementById("btnFirst"),
@@ -103,6 +112,7 @@ const els = {
   btnResignCancel: document.getElementById("btnResignCancel"),
   counter: document.getElementById("counter"),
   currentFen: document.getElementById("currentFen"),
+  currentLichess: document.getElementById("currentLichess"),
 
   infoTurn: document.getElementById("infoTurn"),
   infoCastling: document.getElementById("infoCastling"),
@@ -217,10 +227,18 @@ function isAckMessage(text) {
   return /^(OK:|ERR:)/i.test((text || "").trim());
 }
 
+function isGattDisconnectedError(message) {
+  return /gatt server is disconnected|cannot perform gatt operations|not connected|device\.gatt\.connect/i.test(String(message || ""));
+}
+
 async function sendDeviceCommand(cmd) {
   const cmdChar = cmdCharacteristic;
   if (!cmdChar) {
     throw new Error("Command characteristic is not available");
+  }
+
+  if (!bleDevice?.gatt?.connected) {
+    throw new Error("BLE disconnected. Click Scan + Connect, then retry.");
   }
 
   if (cmdAckPending) {
@@ -264,6 +282,12 @@ async function sendDeviceCommand(cmd) {
         await sleep(50 + attempt * 35);
       } catch (err) {
         const emsg = err?.message || String(err);
+        if (isGattDisconnectedError(emsg)) {
+          if (connected && typeof bleDisconnectHandler === "function") {
+            bleDisconnectHandler();
+          }
+          throw new Error("BLE disconnected during command. Reconnect and retry.");
+        }
         ackErr = emsg;
         const retryable = /already in progress|unknown reason|busy|operation failed/i.test(emsg);
         if (!retryable || attempt === 3) {
@@ -287,6 +311,12 @@ async function sendDeviceCommand(cmd) {
           ackText = v2;
         } catch (err) {
           const emsg = err?.message || String(err);
+          if (isGattDisconnectedError(emsg)) {
+            if (connected && typeof bleDisconnectHandler === "function") {
+              bleDisconnectHandler();
+            }
+            throw new Error("BLE disconnected during command. Reconnect and retry.");
+          }
           ackErr = emsg;
           const retryable = /already in progress|unknown reason|busy|operation failed/i.test(emsg);
           if (!retryable || attempt === 5) {
@@ -315,7 +345,7 @@ async function sendDeviceCommand(cmd) {
 function onDeviceLogNotify(event) {
   const line = textDecoder.decode(event.target.value).trim();
   if (!line) return;
-  const level = /ERR|FAILED|UNKNOWN|NO_GAME|START_FAILED|NO_ACK/i.test(line) ? "err" : "info";
+  const level = /\bERR:|FAILED|UNKNOWN|NO_GAME|START_FAILED|NO_ACK/i.test(line) ? "err" : "info";
   addLogLine(level, line);
 
   if (/WRONG_TURN/i.test(line)) {
@@ -323,6 +353,27 @@ function onDeviceLogNotify(event) {
   }
   if (/MOVE_CONFIRMED|RETURNED_SOURCE|FALLBACK_RETURN_SOURCE|STOPPED|STARTED/i.test(line)) {
     stopWrongTurnAlarm();
+  }
+
+  if (pendingLichessGameId !== null) {
+    const uploadedMatch = line.match(/\[LICHESS\]\s+Uploaded\s+(https?:\/\/\S+)/i);
+    if (uploadedMatch) {
+      const url = uploadedMatch[1];
+      patchGameRecord(pendingLichessGameId, {
+        lichessSync: "done",
+        lichessUrl: url,
+        lichessError: "",
+        lichessUpdatedAt: new Date().toISOString(),
+      });
+      pendingLichessGameId = null;
+    } else if (/\[LICHESS\]\s+Upload failed status=/i.test(line) || /\[LICHESS\]\s+Upload response missing url/i.test(line)) {
+      patchGameRecord(pendingLichessGameId, {
+        lichessSync: "error",
+        lichessError: "UPLOAD_FAILED",
+        lichessUpdatedAt: new Date().toISOString(),
+      });
+      pendingLichessGameId = null;
+    }
   }
 
   if (level === "err") {
@@ -536,6 +587,7 @@ function updateStatus() {
 
   syncActionButtons();
   updateStatsUI();
+  renderLichessLive();
 }
 
 function decodeFEN(fen) {
@@ -684,6 +736,180 @@ function onFenNotify(event) {
   pushFenIfChanged(value);
 }
 
+function readLocalSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_DB_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeLocalSettings(payload) {
+  try {
+    localStorage.setItem(SETTINGS_DB_KEY, JSON.stringify(payload));
+  } catch (e) {
+  }
+}
+
+function parsePipePayload(text) {
+  if (!text) return null;
+  const normalized = text.replace(/^OK:\s*/i, "").trim();
+  if (!normalized) return null;
+
+  const parts = normalized.split("|");
+  const head = (parts.shift() || "").trim();
+  const info = {};
+  for (const part of parts) {
+    const eqIndex = part.indexOf("=");
+    if (eqIndex <= 0) continue;
+    const key = part.slice(0, eqIndex).trim().toLowerCase();
+    const value = part.slice(eqIndex + 1).trim();
+    if (key) {
+      info[key] = value;
+    }
+  }
+
+  return { head, info, normalized };
+}
+
+function parseLichessStatusPayload(text) {
+  const parsed = parsePipePayload(text);
+  if (!parsed) return null;
+
+  const headUpper = (parsed.head || "").toUpperCase();
+  if (!headUpper.startsWith("LICHESS")) {
+    return null;
+  }
+
+  let state = String(parsed.info.state || "").toUpperCase();
+  if (!state) {
+    if (headUpper.includes("QUEUED")) {
+      state = "QUEUED";
+    } else {
+      state = "IDLE";
+    }
+  }
+
+  return {
+    state,
+    url: parsed.info.url || "",
+    err: parsed.info.err || "",
+    ply: parseInt(parsed.info.ply, 10) || 0,
+  };
+}
+
+function parseCfgPayload(text) {
+  if (!text) return null;
+  const normalized = text.replace(/^OK:\s*/i, "").trim();
+  if (!(normalized.startsWith("CFG") || normalized.startsWith("CFG_SAVED"))) {
+    return null;
+  }
+
+  const parts = normalized.split("|");
+  const info = {};
+  for (const part of parts) {
+    const eqIndex = part.indexOf("=");
+    if (eqIndex > 0) {
+      const key = part.slice(0, eqIndex).trim();
+      const value = part.slice(eqIndex + 1).trim();
+      if (key) {
+        info[key] = value;
+      }
+    }
+  }
+
+  const normalizeBool = (v, fallback = false) => {
+    if (v === undefined || v === null || v === "") return fallback;
+    const token = String(v).trim().toLowerCase();
+    return token === "1" || token === "true" || token === "on" || token === "yes";
+  };
+
+  return {
+    version: parseInt(info.ver, 10) || 1,
+    verbose: normalizeBool(info.verbose, false),
+    continuous: normalizeBool(info.continuous, true),
+    letters: normalizeBool(info.letters, true),
+    updatedAt: new Date().toISOString(),
+    source: "esp32",
+  };
+}
+
+function buildCfgSetCommand(settings) {
+  const ver = Math.max(1, Number(settings.version) || 1);
+  const verbose = settings.verbose ? 1 : 0;
+  const continuous = settings.continuous ? 1 : 0;
+  const letters = settings.letters ? 1 : 0;
+  return `CFG_SET|VER=${ver}|VERBOSE=${verbose}|CONTINUOUS=${continuous}|LETTERS=${letters}`;
+}
+
+function shouldPushLocalSettings(localCfg, espCfg) {
+  if (!localCfg) return false;
+  if (!espCfg) return true;
+  const localVer = Number(localCfg.version) || 0;
+  const espVer = Number(espCfg.version) || 0;
+  if (localVer > espVer) return true;
+  if (localVer < espVer) return false;
+
+  return (
+    Boolean(localCfg.verbose) !== Boolean(espCfg.verbose) ||
+    Boolean(localCfg.continuous) !== Boolean(espCfg.continuous) ||
+    Boolean(localCfg.letters) !== Boolean(espCfg.letters)
+  );
+}
+
+async function syncSettingsWithDevice() {
+  if (!cmdCharacteristic || !connected) return;
+
+  const localBefore = readLocalSettings();
+
+  let deviceCfg = null;
+  try {
+    const cfgAck = await sendDeviceCommand("CFG_GET");
+    deviceCfg = parseCfgPayload(cfgAck);
+  } catch (e) {
+    addLogLine("warn", `[CFG] Read failed: ${e?.message || String(e)}`);
+    return;
+  }
+
+  if (!deviceCfg) {
+    return;
+  }
+
+  if (!localBefore) {
+    writeLocalSettings(deviceCfg);
+    addLogLine("info", `[CFG] Pulled ver=${deviceCfg.version}`);
+    return;
+  }
+
+  if (!shouldPushLocalSettings(localBefore, deviceCfg)) {
+    writeLocalSettings(deviceCfg);
+    return;
+  }
+
+  const nextVer = Math.max((Number(localBefore.version) || 0), (Number(deviceCfg?.version) || 0)) + 1;
+  const payload = {
+    version: nextVer,
+    verbose: Boolean(localBefore.verbose),
+    continuous: Boolean(localBefore.continuous),
+    letters: Boolean(localBefore.letters),
+  };
+
+  try {
+    const saveAck = await sendDeviceCommand(buildCfgSetCommand(payload));
+    const saved = parseCfgPayload(saveAck);
+    if (saved) {
+      writeLocalSettings(saved);
+      addLogLine("ok", `[CFG] Synced ver=${saved.version}`);
+    }
+  } catch (e) {
+    addLogLine("warn", `[CFG] Push failed: ${e?.message || String(e)}`);
+  }
+}
+
 async function sendBleText(text) {
   if (!fenCharacteristic) throw new Error("BLE char not ready");
   const enc = new TextEncoder().encode(text);
@@ -714,6 +940,9 @@ async function connectBle() {
 
   bleDisconnectHandler = () => {
     stopWrongTurnAlarm();
+    abortPendingLichess("BLE_DISCONNECTED");
+    hasSessionStarted = false;
+    currentSessionGameId = null;
     connected = false;
     sessionOn = false;
     sessionStartMs = null;
@@ -736,8 +965,24 @@ async function connectBle() {
   };
   bleDevice.addEventListener("gattserverdisconnected", bleDisconnectHandler);
 
-  bleServer = await bleDevice.gatt.connect();
-  const service = await bleServer.getPrimaryService(SERVICE_UUID);
+  const connectAndGetService = async () => {
+    bleServer = await bleDevice.gatt.connect();
+    return bleServer.getPrimaryService(SERVICE_UUID);
+  };
+
+  let service;
+  try {
+    service = await connectAndGetService();
+  } catch (err) {
+    const msg = String(err?.message || err || "");
+    const retryable = /gatt server is disconnected|not connected|failed to execute 'getprimaryservice'/i.test(msg);
+    if (!retryable) {
+      throw err;
+    }
+    await sleep(120);
+    service = await connectAndGetService();
+  }
+
   fenCharacteristic = await service.getCharacteristic(FEN_CHAR_UUID);
 
   try {
@@ -768,6 +1013,7 @@ async function connectBle() {
   els.deviceName.textContent = `Device: ${bleDevice.name || bleDevice.id}`;
   setMessage("Connected. You can press START.");
   addLogLineDedup("info", "[BLE] Connected");
+  await syncSettingsWithDevice();
   if (initial && initial !== "-") {
     pushFenIfChanged(initial);
   }
@@ -775,6 +1021,9 @@ async function connectBle() {
 
 async function disconnectBle() {
   stopWrongTurnAlarm();
+  abortPendingLichess("BLE_DISCONNECTED");
+  hasSessionStarted = false;
+  currentSessionGameId = null;
 
   if (fenCharacteristic) {
     try {
@@ -822,6 +1071,9 @@ async function disconnectBle() {
 
 async function startSession() {
   stopWrongTurnAlarm();
+  hasSessionStarted = false;
+  currentSessionGameId = null;
+  renderLichessLive();
 
   let ack = "";
   if (cmdCharacteristic) {
@@ -850,6 +1102,8 @@ async function startSession() {
   turnStartMs = sessionStartMs;
   lastMoveDeltaMs = 0;
   startGameRecording();
+  hasSessionStarted = true;
+  currentSessionGameId = null;
 
   sessionOn = true;
   updateStatus();
@@ -876,11 +1130,16 @@ async function endSession(endOverride = null) {
   }
 
   const finalFen = (els.currentFen.textContent || "").trim();
-  finishGameRecording(ack, finalFen, endOverride);
+  const savedGameId = finishGameRecording(ack, finalFen, endOverride);
+  currentSessionGameId = savedGameId;
 
   sessionOn = false;
   updateStatus();
   resetBoardUiToDefault();
+
+  if (savedGameId !== null && savedGameId !== undefined) {
+    void queueLichessPublishForGame(savedGameId);
+  }
 
   if (endOverride?.endType === "resign") {
     const sideLabel = endOverride.resignSide === "black" ? "Black" : "White";
@@ -909,6 +1168,11 @@ function clearHistory() {
   els.infoMove.textContent = "-";
   turnStartMs = sessionOn ? Date.now() : null;
   lastMoveDeltaMs = 0;
+  if (!sessionOn) {
+    hasSessionStarted = false;
+    currentSessionGameId = null;
+  }
+  renderLichessLive();
   refreshHistoryUI();
   syncActionButtons();
 }
@@ -977,6 +1241,26 @@ async function copyFen() {
   if (!fen || fen === "-") return;
   await navigator.clipboard.writeText(fen);
   setMessage("FEN copied");
+}
+
+function openLichessLink() {
+  const url = getCurrentSessionLichessUrl();
+  if (!url) {
+    setMessage("No Lichess link yet", true);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+async function copyLichessLink() {
+  const url = getCurrentSessionLichessUrl();
+  if (!url) {
+    setMessage("No Lichess link yet", true);
+    return;
+  }
+
+  await navigator.clipboard.writeText(url);
+  setMessage("Lichess link copied");
 }
 
 function exportFenHistory() {
@@ -1059,10 +1343,101 @@ function readGamesDb() {
   }
 }
 
+function getGameRecordById(gameId) {
+  if (gameId === null || gameId === undefined) {
+    return null;
+  }
+  const games = readGamesDb();
+  for (let i = games.length - 1; i >= 0; i--) {
+    if (String(games[i]?.id) === String(gameId)) {
+      return games[i] || null;
+    }
+  }
+  return null;
+}
+
+function getCurrentSessionLichessUrl() {
+  const game = getGameRecordById(currentSessionGameId);
+  return String(game?.lichessUrl || "").trim();
+}
+
+function renderLichessLive() {
+  if (!els.currentLichess) {
+    return;
+  }
+
+  if (!hasSessionStarted) {
+    els.currentLichess.textContent = "-";
+    if (els.btnOpenLichess) els.btnOpenLichess.disabled = true;
+    if (els.btnCopyLichess) els.btnCopyLichess.disabled = true;
+    return;
+  }
+
+  const game = getGameRecordById(currentSessionGameId);
+  const url = getCurrentSessionLichessUrl();
+  const sync = String(game?.lichessSync || "").toLowerCase();
+
+  let display = "[in progress]";
+  if (url) {
+    display = url;
+  } else if (!game) {
+    display = sessionOn ? "[in progress]" : "[waiting result]";
+  } else if (sync === "queued" || sync === "pending") {
+    display = "[pending upload]";
+  } else if (sync === "error") {
+    display = `[error: ${game?.lichessError || "UPLOAD_FAILED"}]`;
+  } else if (sync === "skipped") {
+    display = "[upload skipped]";
+  } else {
+    display = "[waiting result]";
+  }
+
+  els.currentLichess.textContent = display;
+  if (els.btnOpenLichess) {
+    els.btnOpenLichess.disabled = !url;
+  }
+  if (els.btnCopyLichess) {
+    els.btnCopyLichess.disabled = !url;
+  }
+}
+
 function updateGamesCount() {
   if (!els.gamesCount) return;
   const games = readGamesDb();
   els.gamesCount.textContent = String(games.length);
+}
+
+function patchGameRecord(gameId, patch) {
+  if (gameId === null || gameId === undefined) {
+    return false;
+  }
+
+  try {
+    const games = readGamesDb();
+    let updated = false;
+    for (let i = 0; i < games.length; i++) {
+      if (String(games[i]?.id) !== String(gameId)) {
+        continue;
+      }
+      games[i] = {
+        ...games[i],
+        ...patch,
+      };
+      updated = true;
+      break;
+    }
+
+    if (!updated) {
+      return false;
+    }
+
+    localStorage.setItem(DB_KEY, JSON.stringify(games));
+    updateGamesCount();
+    renderLichessLive();
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 function finishGameRecording(resultText, fallbackFen, endOverride = null) {
@@ -1091,6 +1466,8 @@ function finishGameRecording(resultText, fallbackFen, endOverride = null) {
   const elapsedMs = getSessionElapsedMs();
   const moves = parsed?.moves ?? Math.max(0, fenHistory.length - 1);
   const timeStr = parsed?.timeStr || formatCompactDuration(elapsedMs);
+  const gameId = Date.now();
+  let saved = false;
 
   const fenTrail = fenHistory.map((fen, idx) => {
     const parsedFen = decodeFEN(fen);
@@ -1106,7 +1483,7 @@ function finishGameRecording(resultText, fallbackFen, endOverride = null) {
   try {
     const existing = readGamesDb();
     existing.push({
-      id: Date.now(),
+      id: gameId,
       gameNumber: existing.length + 1,
       playedAt: new Date().toISOString(),
       result: result,
@@ -1116,14 +1493,179 @@ function finishGameRecording(resultText, fallbackFen, endOverride = null) {
       timeStr: timeStr,
       endFen: finalFen,
       fenTrail: fenTrail,
+      lichessUrl: "",
+      lichessSync: "pending",
+      lichessError: "",
+      lichessUpdatedAt: "",
     });
     localStorage.setItem(DB_KEY, JSON.stringify(existing));
     updateGamesCount();
+    saved = true;
   } catch (err) {
     console.error("DB save failed:", err);
   }
 
   currentGame = null;
+  return saved ? gameId : null;
+}
+
+function normalizeAckError(ackText) {
+  if (!ackText) return "UNKNOWN";
+  return ackText.replace(/^ERR:\s*/i, "").trim() || "UNKNOWN";
+}
+
+function abortPendingLichess(reason) {
+  if (pendingLichessGameId === null) {
+    return;
+  }
+  patchGameRecord(pendingLichessGameId, {
+    lichessSync: "error",
+    lichessError: reason || "ABORTED",
+    lichessUpdatedAt: new Date().toISOString(),
+  });
+  pendingLichessGameId = null;
+}
+
+async function pumpLichessStatus() {
+  if (lichessPollActive) {
+    return;
+  }
+
+  lichessPollActive = true;
+  try {
+    while (pendingLichessGameId !== null) {
+      if (Date.now() - pendingLichessStartedMs > LICHESS_POLL_TIMEOUT_MS) {
+        patchGameRecord(pendingLichessGameId, {
+          lichessSync: "error",
+          lichessError: "TIMEOUT",
+          lichessUpdatedAt: new Date().toISOString(),
+        });
+        addLogLine("warn", "[LICHESS] Upload timeout");
+        pendingLichessGameId = null;
+        break;
+      }
+
+      if (!connected || !cmdCharacteristic) {
+        patchGameRecord(pendingLichessGameId, {
+          lichessSync: "error",
+          lichessError: "BLE_DISCONNECTED",
+          lichessUpdatedAt: new Date().toISOString(),
+        });
+        pendingLichessGameId = null;
+        break;
+      }
+
+      if (sessionOn || cmdInFlight) {
+        await sleep(250);
+        continue;
+      }
+
+      let ack = "";
+      try {
+        ack = await sendDeviceCommand("LICHESS_STATUS");
+      } catch (err) {
+        await sleep(350);
+        continue;
+      }
+
+      const status = parseLichessStatusPayload(ack);
+      if (!status) {
+        await sleep(700);
+        continue;
+      }
+
+      if (status.state === "DONE") {
+        patchGameRecord(pendingLichessGameId, {
+          lichessSync: "done",
+          lichessUrl: status.url || "",
+          lichessError: "",
+          lichessUpdatedAt: new Date().toISOString(),
+        });
+        if (status.url) {
+          addLogLine("ok", `[LICHESS] Uploaded ${status.url}`);
+          showToast(`Lichess uploaded: ${status.url}`, "info");
+        } else {
+          addLogLine("warn", "[LICHESS] DONE but URL missing");
+        }
+        pendingLichessGameId = null;
+        break;
+      }
+
+      if (status.state === "ERROR") {
+        patchGameRecord(pendingLichessGameId, {
+          lichessSync: "error",
+          lichessError: status.err || "UPLOAD_FAILED",
+          lichessUpdatedAt: new Date().toISOString(),
+        });
+        addLogLine("warn", `[LICHESS] Upload failed (${status.err || "UPLOAD_FAILED"})`);
+        pendingLichessGameId = null;
+        break;
+      }
+
+      await sleep(1000);
+    }
+  } finally {
+    lichessPollActive = false;
+  }
+}
+
+async function queueLichessPublishForGame(gameId) {
+  if (gameId === null || gameId === undefined) {
+    return;
+  }
+
+  if (!connected || !cmdCharacteristic) {
+    const reason = connected ? "CMD_NOT_AVAILABLE" : "BLE_DISCONNECTED";
+    patchGameRecord(gameId, {
+      lichessSync: "skipped",
+      lichessError: reason,
+      lichessUpdatedAt: new Date().toISOString(),
+    });
+    return;
+  }
+
+  let queueAck = "";
+  try {
+    queueAck = await sendDeviceCommand("LICHESS_PUBLISH");
+  } catch (err) {
+    patchGameRecord(gameId, {
+      lichessSync: "error",
+      lichessError: err?.message || String(err),
+      lichessUpdatedAt: new Date().toISOString(),
+    });
+    addLogLine("warn", `[LICHESS] Queue failed (${err?.message || String(err)})`);
+    return;
+  }
+
+  if (!queueAck.startsWith("OK:")) {
+    const errText = normalizeAckError(queueAck);
+    patchGameRecord(gameId, {
+      lichessSync: "error",
+      lichessError: errText,
+      lichessUpdatedAt: new Date().toISOString(),
+    });
+    addLogLine("warn", `[LICHESS] Queue rejected (${errText})`);
+    return;
+  }
+
+  patchGameRecord(gameId, {
+    lichessSync: "queued",
+    lichessError: "",
+    lichessUpdatedAt: new Date().toISOString(),
+  });
+
+  if (pendingLichessGameId !== null && String(pendingLichessGameId) !== String(gameId)) {
+    patchGameRecord(pendingLichessGameId, {
+      lichessSync: "error",
+      lichessError: "REPLACED_BY_NEW_GAME",
+      lichessUpdatedAt: new Date().toISOString(),
+    });
+  }
+
+  pendingLichessGameId = gameId;
+  pendingLichessStartedMs = Date.now();
+  addLogLine("info", `[LICHESS] ${queueAck.replace(/^OK:\s*/i, "").trim()}`);
+  void pumpLichessStatus();
 }
 
 async function resignSession(resignSide) {
@@ -1229,6 +1771,12 @@ if (els.resignModal) {
 els.btnClear.addEventListener("click", clearHistory);
 els.btnFlip.addEventListener("click", flipBoard);
 els.btnCopyFen.addEventListener("click", copyFen);
+if (els.btnOpenLichess) {
+  els.btnOpenLichess.addEventListener("click", openLichessLink);
+}
+if (els.btnCopyLichess) {
+  els.btnCopyLichess.addEventListener("click", copyLichessLink);
+}
 if (els.btnExportFen) {
   els.btnExportFen.addEventListener("click", exportFenHistory);
 }

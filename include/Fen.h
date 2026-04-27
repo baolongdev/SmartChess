@@ -22,3 +22,18 @@ String currentFEN(const char board[8][8],
                   bool whiteRookHMoved,
                   bool blackRookAMoved,
                   bool blackRookHMoved);
+
+void currentFEN(const char board[8][8],
+                char* out,
+                size_t len,
+                bool whiteTurn,
+                int enPassantFile,
+                int enPassantRank,
+                int halfmoveClock,
+                int fullmoveNumber,
+                bool whiteKingMoved,
+                bool blackKingMoved,
+                bool whiteRookAMoved,
+                bool whiteRookHMoved,
+                bool blackRookAMoved,
+                bool blackRookHMoved);

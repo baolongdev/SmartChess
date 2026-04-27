@@ -23,6 +23,7 @@
           <span id="sessionStatus" class="pill off">Session Off</span>
           <span id="deviceName" class="pill pill-blue">Device: -</span>
           <a href="games.html" id="gamesLink" class="pill pill-purple">Games: <span id="gamesCount">0</span></a>
+          <a href="settings.html" id="settingsLink" class="pill pill-cfg">Settings</a>
         </div>
       </header>
 
@@ -75,6 +76,13 @@
             <div id="currentFen" class="fen-current-value">-</div>
             <div class="fen-copy-row">
               <button id="btnCopyFen" class="btn-nav btn-copy">copy fen</button>
+            </div>
+
+            <div class="fen-current-label">// lichess_game</div>
+            <div id="currentLichess" class="fen-current-value fen-lichess-value">-</div>
+            <div class="fen-copy-row fen-lichess-actions">
+              <button id="btnOpenLichess" class="btn-nav">open</button>
+              <button id="btnCopyLichess" class="btn-nav btn-copy">copy link</button>
             </div>
 
             <div class="fen-meta">

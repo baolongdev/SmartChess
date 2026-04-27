@@ -315,6 +315,10 @@ textarea {
   margin-left: auto;
 }
 
+.hdr-pills #settingsLink {
+  text-decoration: none;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -349,6 +353,12 @@ textarea {
   color: var(--tp2);
   border-color: rgba(163, 113, 247, 0.35);
   background: rgba(163, 113, 247, 0.08);
+}
+
+.pill-cfg {
+  color: #8fd6ff;
+  border-color: rgba(120, 210, 255, 0.35);
+  background: rgba(120, 210, 255, 0.08);
 }
 
 .cursor::after {
@@ -682,6 +692,13 @@ textarea {
   border-color: var(--tp);
 }
 
+.btn-nav:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: var(--tm);
+  border-color: var(--border);
+}
+
 .btn-copy {
   color: var(--tg);
 }
@@ -742,6 +759,15 @@ textarea {
 .fen-copy-row {
   display: flex;
   justify-content: flex-end;
+}
+
+.fen-lichess-value {
+  color: #9bc8ff;
+  min-height: 44px;
+}
+
+.fen-lichess-actions {
+  gap: 6px;
 }
 
 .fen-meta {

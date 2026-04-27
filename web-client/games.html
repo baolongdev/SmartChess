@@ -261,6 +261,30 @@
       white-space: nowrap;
     }
 
+    .games-table .lichess-cell {
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .lichess-link {
+      color: #86b9ff;
+      text-decoration: none;
+      border-bottom: 1px dotted rgba(134, 185, 255, 0.65);
+    }
+
+    .lichess-link:hover {
+      color: #d4e5ff;
+      border-bottom-color: #d4e5ff;
+    }
+
+    .lichess-state {
+      color: var(--tm);
+    }
+
+    .lichess-state.err {
+      color: #ff9690;
+    }
+
     .games-table .btn-icon {
       background: transparent;
       border: 1px solid var(--border);
@@ -483,6 +507,7 @@
       <div class="hdr-sub">// game database management</div>
       <div class="hdr-pills">
         <a href="index.html" class="back-link">← board</a>
+        <a href="settings.html" class="back-link">settings</a>
       </div>
     </header>
 
@@ -566,6 +591,7 @@
             <th>Moves</th>
             <th>Time</th>
             <th>Final FEN</th>
+            <th>Lichess</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -593,6 +619,7 @@
         <div class="detail-row"><div class="detail-key">Result</div><div class="detail-val" id="modalResult">-</div></div>
         <div class="detail-row"><div class="detail-key">Moves</div><div class="detail-val" id="modalMoves">-</div></div>
         <div class="detail-row"><div class="detail-key">Duration</div><div class="detail-val" id="modalTime">-</div></div>
+        <div class="detail-row"><div class="detail-key">Lichess</div><div class="detail-val" id="modalLichess">-</div></div>
         <div class="detail-row"><div class="detail-key">Final FEN</div><div class="detail-val"><div class="fen-box" id="modalFen">-</div></div></div>
         <div class="detail-row"><div class="detail-key">FEN Moves</div><div class="detail-val"><div class="fen-actions"><button id="btnCopyAllFen" class="btn-copy-all">copy all FEN</button></div><div class="fen-move-list" id="modalFenTrail"></div></div></div>
       </div>
@@ -639,6 +666,7 @@ const els = {
   modalResult: document.getElementById("modalResult"),
   modalMoves: document.getElementById("modalMoves"),
   modalTime: document.getElementById("modalTime"),
+  modalLichess: document.getElementById("modalLichess"),
   modalFen: document.getElementById("modalFen"),
   modalFenTrail: document.getElementById("modalFenTrail"),
   btnCopyAllFen: document.getElementById("btnCopyAllFen"),
@@ -715,7 +743,9 @@ function applyFilter() {
     if (search) {
       const matchFen = g.endFen && g.endFen.toLowerCase().includes(search);
       const matchDate = g.playedAt && g.playedAt.toLowerCase().includes(search);
-      if (!matchFen && !matchDate) return false;
+      const matchLichess = g.lichessUrl && g.lichessUrl.toLowerCase().includes(search);
+      const matchErr = g.lichessError && g.lichessError.toLowerCase().includes(search);
+      if (!matchFen && !matchDate && !matchLichess && !matchErr) return false;
     }
     return true;
   });
@@ -772,6 +802,36 @@ function formatResultLabel(result) {
   return "-";
 }
 
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildLichessCellHtml(game) {
+  const url = String(game?.lichessUrl || "").trim();
+  if (url) {
+    const safeUrl = escapeHtml(url);
+    return `<a class="lichess-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">open</a>`;
+  }
+
+  const sync = String(game?.lichessSync || "").toLowerCase();
+  if (sync === "queued" || sync === "pending") {
+    return '<span class="lichess-state">pending</span>';
+  }
+  if (sync === "skipped") {
+    return '<span class="lichess-state">skipped</span>';
+  }
+  if (sync === "error") {
+    const err = escapeHtml(String(game?.lichessError || "UPLOAD_FAILED"));
+    return `<span class="lichess-state err" title="${err}">error</span>`;
+  }
+  return '<span class="lichess-state">-</span>';
+}
+
 function showGameModal(game) {
   if (!game || !els.gameModalOverlay) return;
 
@@ -789,6 +849,9 @@ function showGameModal(game) {
   els.modalResult.className = `detail-val result-${game.result || "draw"}`;
   els.modalMoves.textContent = String(game.moves ?? "-");
   els.modalTime.textContent = game.timeStr || "-";
+  if (els.modalLichess) {
+    els.modalLichess.innerHTML = buildLichessCellHtml(game);
+  }
   els.modalFen.textContent = game.endFen || "-";
 
   const trail = Array.isArray(game.fenTrail) ? game.fenTrail : [];
@@ -849,6 +912,7 @@ function renderTable() {
         <td>${g.moves}</td>
         <td class="time-cell">${g.timeStr}</td>
         <td class="fen-cell" title="${g.endFen || ""}">${g.endFen ? g.endFen.substring(0, 40) + "..." : "-"}</td>
+        <td class="lichess-cell">${buildLichessCellHtml(g)}</td>
         <td><button class="btn-icon" data-view-index="${idx}">view</button></td>
       </tr>
     `;

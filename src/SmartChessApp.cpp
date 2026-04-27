@@ -1,16 +1,23 @@
 #include "SmartChessApp.h"
 
 #include <Arduino.h>
+#include <esp_task_wdt.h>
 #include <MFRC522.h>
+#include <Preferences.h>
+#include <WiFi.h>
 
 #include "BoardState.h"
 #include "BleFen.h"
 #include "Fen.h"
+#include "LichessPublish.h"
 #include "MoveGen.h"
 #include "RfidScanner.h"
 #include "ScanDebug.h"
 #include "SmartChessConfig.h"
 #include "SmartChessTypes.h"
+#include "TextUtils.h"
+
+#include <ctype.h>
 
 static MFRC522 mfrc522(SS_PIN, RST_PIN);
 
@@ -84,6 +91,523 @@ constexpr unsigned long CMD_COMMIT_IDLE_MS = 120;
 static String startFailReason = "UNKNOWN";
 static String startFailDetail = "";
 
+static Preferences settingsStore;
+static bool settingsStoreReady = false;
+static uint32_t settingsVersion = 1;
+static uint32_t wifiSettingsVersion = 1;
+constexpr const char *SETTINGS_NS = "smartchess";
+constexpr const char *KEY_CFG_VER = "cfg_ver";
+constexpr const char *KEY_SCAN_V = "scan_v";
+constexpr const char *KEY_SCAN_C = "scan_c";
+constexpr const char *KEY_SCAN_L = "scan_l";
+constexpr const char *KEY_WIFI_VER = "wifi_ver";
+constexpr const char *KEY_WIFI_SSID = "wifi_ssid";
+constexpr const char *KEY_WIFI_PASS = "wifi_pass";
+constexpr const char *KEY_WIFI_AUTO = "wifi_auto";
+
+static String wifiSavedSsid = "";
+static String wifiSavedPass = "";
+static bool wifiAutoConnect = true;
+static bool wifiConnectInProgress = false;
+static unsigned long wifiConnectStartMs = 0;
+static bool wifiLastConnected = false;
+constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
+constexpr int WIFI_SCAN_MAX = 24;
+static String wifiScanResults[WIFI_SCAN_MAX];
+static int wifiScanCount = 0;
+static String wifiScanLastError = "";
+static bool wifiConnectFailed = false;
+static String wifiLastError = "";
+
+static char lichessMovesBuf[512];
+static int lichessMovesLen = 0;
+static int lichessPlyCount = 0;
+static String lastLichessUrl = "";
+static String lastLichessError = "";
+static bool lichessRepublishPending = false;
+static bool lichessAutoPublishPerMove = false;
+
+static int lichessUploadState = LICHESS_IDLE;
+static char lichessPayloadBuf[192];
+
+static bool startWifiConnect();
+static bool handleWifiSetCommand(const String &cmd, String &response);
+static const char* buildLichessPayload(const char* prefix);
+static bool queueLichessPublish(String &response);
+static void printCfgStatus();
+static void printWifiStatus();
+
+static LichessContext makeLichessContext() {
+  LichessContext ctx = {};
+  ctx.movesBuf = lichessMovesBuf;
+  ctx.movesBufSize = (int)sizeof(lichessMovesBuf);
+  ctx.movesLen = &lichessMovesLen;
+  ctx.plyCount = &lichessPlyCount;
+  ctx.lastUrl = &lastLichessUrl;
+  ctx.lastError = &lastLichessError;
+  ctx.republishPending = &lichessRepublishPending;
+  ctx.autoPublishPerMove = &lichessAutoPublishPerMove;
+  ctx.uploadState = &lichessUploadState;
+  ctx.whiteKingMoved = whiteKingMoved;
+  ctx.blackKingMoved = blackKingMoved;
+  ctx.whiteRookAMoved = whiteRookAMoved;
+  ctx.whiteRookHMoved = whiteRookHMoved;
+  ctx.blackRookAMoved = blackRookAMoved;
+  ctx.blackRookHMoved = blackRookHMoved;
+  ctx.board = board;
+  ctx.enPassantFile = enPassantFile;
+  ctx.enPassantRank = enPassantRank;
+  return ctx;
+}
+
+static String wifiStatusText() {
+  wl_status_t st = WiFi.status();
+  if (st == WL_CONNECTED) {
+    return String("CONNECTED");
+  }
+  if (wifiConnectFailed) {
+    return String("FAILED");
+  }
+  if (wifiConnectInProgress) {
+    return String("CONNECTING");
+  }
+  return String("DISCONNECTED");
+}
+
+static String wifiIpText() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return WiFi.localIP().toString();
+  }
+  return String("0.0.0.0");
+}
+
+static int performWifiScan() {
+  bool resumeConnectAfterScan = wifiConnectInProgress;
+  if (resumeConnectAfterScan) {
+    wifiConnectInProgress = false;
+  }
+
+  WiFi.mode(WIFI_STA);
+  delay(40);
+  WiFi.scanDelete();
+
+  int n = -1;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    n = WiFi.scanNetworks(false, true);
+    if (n >= 0) {
+      break;
+    }
+    delay(120 + attempt * 80);
+  }
+
+  if (n < 0) {
+    wifiScanLastError = "SCAN_FAIL";
+    n = 0;
+  } else if (n == 0) {
+    wifiScanLastError = "NO_AP";
+  } else {
+    wifiScanLastError = "";
+  }
+
+  if (n > WIFI_SCAN_MAX) {
+    n = WIFI_SCAN_MAX;
+  }
+
+  wifiScanCount = n;
+  for (int i = 0; i < wifiScanCount; i++) {
+    String ssid = WiFi.SSID(i);
+    ssid.replace("|", " ");
+    wifiScanResults[i] = ssid;
+  }
+  for (int i = wifiScanCount; i < WIFI_SCAN_MAX; i++) {
+    wifiScanResults[i] = "";
+  }
+
+  WiFi.scanDelete();
+
+  if (resumeConnectAfterScan && WiFi.status() != WL_CONNECTED) {
+    wifiConnectInProgress = true;
+  }
+
+  return wifiScanCount;
+}
+
+static String buildWifiScanPayload(const String &prefix) {
+  String payload = prefix;
+  payload += "|count=";
+  payload += String(wifiScanCount);
+  payload += "|err=";
+  payload += wifiScanLastError;
+  return payload;
+}
+
+static String buildWifiScanItemPayload(int idx, const String &prefix) {
+  String payload = prefix;
+  payload += "|idx=";
+  payload += String(idx);
+  payload += "|ssid=";
+  if (idx >= 0 && idx < wifiScanCount) {
+    payload += wifiScanResults[idx];
+  }
+  return payload;
+}
+
+static char wifiPayloadBuf[128];
+
+static const char* buildWifiPayload(const char* prefix) {
+  snprintf(wifiPayloadBuf, sizeof(wifiPayloadBuf),
+    "%s|ver=%lu|ssid=%s|auto=%d|status=%s|ip=%s|err=%s",
+    prefix, wifiSettingsVersion,
+    wifiSavedSsid.c_str(),
+    wifiAutoConnect ? 1 : 0,
+    wifiStatusText().c_str(),
+    wifiIpText().c_str(),
+    wifiLastError.c_str());
+  return wifiPayloadBuf;
+}
+
+static void persistWifiSettingsToStore() {
+  if (!settingsStoreReady) {
+    return;
+  }
+
+  settingsStore.putULong(KEY_WIFI_VER, wifiSettingsVersion);
+  settingsStore.putString(KEY_WIFI_SSID, wifiSavedSsid);
+  settingsStore.putString(KEY_WIFI_PASS, wifiSavedPass);
+  settingsStore.putBool(KEY_WIFI_AUTO, wifiAutoConnect);
+}
+
+static void loadWifiSettingsFromStore() {
+  if (!settingsStoreReady) {
+    return;
+  }
+
+  wifiSettingsVersion = settingsStore.getULong(KEY_WIFI_VER, 1UL);
+  if (wifiSettingsVersion == 0) {
+    wifiSettingsVersion = 1;
+  }
+
+  wifiSavedSsid = settingsStore.getString(KEY_WIFI_SSID, "");
+  wifiSavedPass = settingsStore.getString(KEY_WIFI_PASS, "");
+  wifiAutoConnect = settingsStore.getBool(KEY_WIFI_AUTO, true);
+}
+
+static void bumpWifiSettingsVersion() {
+  if (wifiSettingsVersion >= 0xFFFFFFFFUL) {
+    wifiSettingsVersion = 1;
+  } else {
+    wifiSettingsVersion++;
+  }
+}
+
+static bool startWifiConnect() {
+  if (wifiSavedSsid.length() == 0) {
+    return false;
+  }
+
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true);
+  delay(60);
+  WiFi.begin(wifiSavedSsid.c_str(), wifiSavedPass.c_str());
+  wifiConnectInProgress = true;
+  wifiConnectFailed = false;
+  wifiLastError = "";
+  wifiConnectStartMs = millis();
+  bleFenLog(String("[WIFI] CONNECTING ssid=") + wifiSavedSsid);
+  return true;
+}
+
+static void disconnectWifiNow() {
+  WiFi.disconnect(true);
+  wifiConnectInProgress = false;
+  wifiConnectFailed = false;
+  wifiLastError = "";
+  wifiConnectStartMs = 0;
+  wifiLastConnected = false;
+}
+
+static char settingsPayloadBuf[64];
+
+static const char* buildSettingsPayload(const char* prefix) {
+  snprintf(settingsPayloadBuf, sizeof(settingsPayloadBuf),
+    "%s|ver=%lu|verbose=%d|continuous=%d|letters=%d",
+    prefix, settingsVersion,
+    scanVerbose ? 1 : 0,
+    scanContinuous ? 1 : 0,
+    scanUsePieceLetters ? 1 : 0);
+  return settingsPayloadBuf;
+}
+
+static void bumpSettingsVersion() {
+  if (settingsVersion >= 0xFFFFFFFFUL) {
+    settingsVersion = 1;
+  } else {
+    settingsVersion++;
+  }
+}
+
+static void persistSettingsToStore() {
+  if (!settingsStoreReady) {
+    return;
+  }
+
+  settingsStore.putULong(KEY_CFG_VER, settingsVersion);
+  settingsStore.putBool(KEY_SCAN_V, scanVerbose);
+  settingsStore.putBool(KEY_SCAN_C, scanContinuous);
+  settingsStore.putBool(KEY_SCAN_L, scanUsePieceLetters);
+}
+
+static void loadSettingsFromStore() {
+  if (!settingsStoreReady) {
+    return;
+  }
+
+  settingsVersion = settingsStore.getULong(KEY_CFG_VER, 1UL);
+  if (settingsVersion == 0) {
+    settingsVersion = 1;
+  }
+
+  scanVerbose = settingsStore.getBool(KEY_SCAN_V, false);
+  scanContinuous = settingsStore.getBool(KEY_SCAN_C, true);
+  scanUsePieceLetters = settingsStore.getBool(KEY_SCAN_L, true);
+}
+
+static void saveSettingsAfterLocalChange() {
+  bumpSettingsVersion();
+  persistSettingsToStore();
+}
+
+static bool handleCfgSetCommand(const String &cmd, String &response) {
+  bool hasAnyField = false;
+  bool boolValue = false;
+
+  String vVerbose = settingsFieldValue(cmd, "VERBOSE");
+  if (vVerbose.length() > 0) {
+    if (!parseBoolToken(vVerbose, boolValue)) {
+      response = "CFG_ERR:BAD_VERBOSE";
+      return false;
+    }
+    scanVerbose = boolValue;
+    hasAnyField = true;
+  }
+
+  String vContinuous = settingsFieldValue(cmd, "CONTINUOUS");
+  if (vContinuous.length() > 0) {
+    if (!parseBoolToken(vContinuous, boolValue)) {
+      response = "CFG_ERR:BAD_CONTINUOUS";
+      return false;
+    }
+    scanContinuous = boolValue;
+    hasAnyField = true;
+  }
+
+  String vLetters = settingsFieldValue(cmd, "LETTERS");
+  if (vLetters.length() > 0) {
+    if (!parseBoolToken(vLetters, boolValue)) {
+      response = "CFG_ERR:BAD_LETTERS";
+      return false;
+    }
+    scanUsePieceLetters = boolValue;
+    hasAnyField = true;
+  }
+
+  if (!hasAnyField) {
+    response = "CFG_ERR:NO_FIELDS";
+    return false;
+  }
+
+  uint32_t incomingVer = 0;
+  String vVersion = settingsFieldValue(cmd, "VER");
+  if (vVersion.length() > 0) {
+    incomingVer = (uint32_t)strtoul(vVersion.c_str(), nullptr, 10);
+  }
+
+  if (incomingVer > settingsVersion) {
+    settingsVersion = incomingVer;
+  } else {
+    bumpSettingsVersion();
+  }
+
+  persistSettingsToStore();
+  response = buildSettingsPayload("CFG_SAVED");
+  bleFenLog(String("[CFG] SAVED ") + response);
+  return true;
+}
+
+static void applyLichessStreamCommand(bool enabled, String &response) {
+  lichessAutoPublishPerMove = enabled;
+  response = buildLichessPayload(enabled ? "LICHESS_STREAM_ON" : "LICHESS_STREAM_OFF");
+}
+
+static bool handleCommonCommand(const String &cmd,
+                                const String &cmdUpper,
+                                String &response,
+                                bool &handled) {
+
+  if (cmdUpper == "CFG" || cmdUpper == "CFG?" || cmdUpper == "CFG_GET") {
+    handled = true;
+    response = buildSettingsPayload("CFG");
+    return true;
+  }
+
+  if (cmdUpper.startsWith("CFG_SET")) {
+    handled = true;
+    return handleCfgSetCommand(cmd, response);
+  }
+
+  if (cmdUpper == "WIFI" || cmdUpper == "WIFI?" || cmdUpper == "WIFI_GET") {
+    handled = true;
+    response = buildWifiPayload("WIFI");
+    return true;
+  }
+
+  if (cmdUpper == "WIFI_SCAN") {
+    handled = true;
+    performWifiScan();
+    response = buildWifiScanPayload("WIFI_SCAN");
+    return true;
+  }
+
+  if (cmdUpper.startsWith("WIFI_SCAN_ITEM")) {
+    handled = true;
+    String idxToken = settingsFieldValue(cmd, "IDX");
+    if (idxToken.length() == 0) {
+      response = "WIFI_ERR:BAD_IDX";
+      return false;
+    }
+
+    int idx = idxToken.toInt();
+    if (idx < 0 || idx >= wifiScanCount) {
+      response = "WIFI_ERR:IDX_RANGE";
+      return false;
+    }
+    response = buildWifiScanItemPayload(idx, "WIFI_SCAN_ITEM");
+    return true;
+  }
+
+  if (cmdUpper.startsWith("WIFI_SET")) {
+    handled = true;
+    return handleWifiSetCommand(cmd, response);
+  }
+
+  if (cmdUpper == "WIFI_CONNECT") {
+    handled = true;
+    if (startWifiConnect()) {
+      response = buildWifiPayload("WIFI_CONNECTING");
+      return true;
+    }
+    response = "WIFI_ERR:EMPTY_SSID";
+    return false;
+  }
+
+  if (cmdUpper == "WIFI_DISCONNECT") {
+    handled = true;
+    disconnectWifiNow();
+    response = buildWifiPayload("WIFI_DISCONNECTED");
+    return true;
+  }
+
+  if (cmdUpper == "LICHESS" || cmdUpper == "LICHESS_SEND" || cmdUpper == "LICHESS_PUBLISH") {
+    handled = true;
+    return queueLichessPublish(response);
+  }
+
+  if (cmdUpper == "LICHESS_STREAM_ON") {
+    handled = true;
+    applyLichessStreamCommand(true, response);
+    return true;
+  }
+
+  if (cmdUpper == "LICHESS_STREAM_OFF") {
+    handled = true;
+    applyLichessStreamCommand(false, response);
+    return true;
+  }
+
+  if (cmdUpper == "LICHESS_STATUS" || cmdUpper == "LICHESS?") {
+    handled = true;
+    response = buildLichessPayload("LICHESS");
+    return true;
+  }
+
+  handled = false;
+  return false;
+}
+
+static bool handleWifiSetCommand(const String &cmd, String &response) {
+  bool hasAnyField = false;
+  bool boolValue = false;
+
+  String vSsid = settingsFieldValue(cmd, "SSID");
+  String vPass = settingsFieldValue(cmd, "PASS");
+  String vAuto = settingsFieldValue(cmd, "AUTO");
+  String vConnect = settingsFieldValue(cmd, "CONNECT");
+
+  String cmdUpper = cmd;
+  cmdUpper.toUpperCase();
+
+  if (vSsid.length() > 0 || cmdUpper.indexOf("SSID=") >= 0) {
+    wifiSavedSsid = vSsid;
+    hasAnyField = true;
+  }
+
+  if (vPass.length() > 0 || cmdUpper.indexOf("PASS=") >= 0) {
+    wifiSavedPass = vPass;
+    hasAnyField = true;
+  }
+
+  if (vAuto.length() > 0) {
+    if (!parseBoolToken(vAuto, boolValue)) {
+      response = "WIFI_ERR:BAD_AUTO";
+      return false;
+    }
+    wifiAutoConnect = boolValue;
+    hasAnyField = true;
+  }
+
+  if (!hasAnyField && vConnect.length() == 0) {
+    response = "WIFI_ERR:NO_FIELDS";
+    return false;
+  }
+
+  uint32_t incomingVer = 0;
+  String vVersion = settingsFieldValue(cmd, "VER");
+  if (vVersion.length() > 0) {
+    incomingVer = (uint32_t)strtoul(vVersion.c_str(), nullptr, 10);
+  }
+
+  if (incomingVer > wifiSettingsVersion) {
+    wifiSettingsVersion = incomingVer;
+  } else if (hasAnyField) {
+    bumpWifiSettingsVersion();
+  }
+
+  if (hasAnyField) {
+    persistWifiSettingsToStore();
+  }
+
+  bool forceConnect = false;
+  if (vConnect.length() > 0) {
+    if (!parseBoolToken(vConnect, boolValue)) {
+      response = "WIFI_ERR:BAD_CONNECT";
+      return false;
+    }
+    forceConnect = boolValue;
+  }
+
+  if (forceConnect || wifiAutoConnect) {
+    if (wifiSavedSsid.length() == 0) {
+      response = "WIFI_ERR:EMPTY_SSID";
+      return false;
+    }
+    startWifiConnect();
+  }
+
+  response = buildWifiPayload("WIFI_SAVED");
+  bleFenLog(String("[WIFI] SAVED ") + response);
+  return true;
+}
+
 static void rebuildOccupiedListFromBoard() {
   occupiedCount = 0;
   for (int file = 0; file < 8; file++) {
@@ -143,19 +667,49 @@ static void markCaptured(const String &uid) {
   }
 }
 
-static String buildCurrentFen() {
-  return currentFEN(board,
-                    whiteTurn,
-                    enPassantFile,
-                    enPassantRank,
-                    halfmoveClock,
-                    fullmoveNumber,
-                    whiteKingMoved,
-                    blackKingMoved,
-                    whiteRookAMoved,
-                    whiteRookHMoved,
-                    blackRookAMoved,
-                    blackRookHMoved);
+static char fenBuffer[128];
+
+static const char* buildCurrentFen() {
+  currentFEN(board,
+             fenBuffer,
+             sizeof(fenBuffer),
+             whiteTurn,
+             enPassantFile,
+             enPassantRank,
+             halfmoveClock,
+             fullmoveNumber,
+             whiteKingMoved,
+             blackKingMoved,
+             whiteRookAMoved,
+             whiteRookHMoved,
+             blackRookAMoved,
+             blackRookHMoved);
+  return fenBuffer;
+}
+
+static void resetLichessTracking() {
+  LichessContext ctx = makeLichessContext();
+  lichessResetTracking(ctx);
+}
+
+static const char* buildLichessPayload(const char* prefix) {
+  LichessContext ctx = makeLichessContext();
+  return lichessBuildPayload(ctx, prefix, lichessPayloadBuf, sizeof(lichessPayloadBuf));
+}
+
+static bool queueLichessPublish(String &response) {
+  LichessContext ctx = makeLichessContext();
+  return lichessQueuePublish(ctx, response, bleFenLog);
+}
+
+static void requestLichessAutoPublish() {
+  LichessContext ctx = makeLichessContext();
+  lichessRequestAutoPublish(ctx, bleFenLog);
+}
+
+static void processLichessUploadTick() {
+  LichessContext ctx = makeLichessContext();
+  lichessProcessUploadTick(ctx, bleFenLog);
 }
 
 static void publishFenIfChanged(const String &fen) {
@@ -242,6 +796,7 @@ static void resetGameRuntimeState() {
 
 static void prepareNewGameModel() {
   resetGameRuntimeState();
+  resetLichessTracking();
   initStandardBoard(board);
   rebuildOccupiedListFromBoard();
 }
@@ -522,6 +1077,18 @@ static bool applyMove(int fromIdx, int toIdx, const String &movedUid) {
     isCapture = true;
   }
 
+  bool willPromoteToQueen = ((piece == 'P' && toRank == 7) || (piece == 'p' && toRank == 0));
+  LichessContext lichessCtx = makeLichessContext();
+  String lichessSanMove = lichessBuildSanMove(lichessCtx,
+                                              fromIdx,
+                                              toIdx,
+                                              piece,
+                                              isCapture,
+                                              castleKingSide,
+                                              castleQueenSide,
+                                              enPassantCapture,
+                                              willPromoteToQueen);
+
   board[toFile][toRank] = piece;
   board[fromFile][fromRank] = '.';
   squareUID[toIdx] = movedUid;
@@ -604,6 +1171,13 @@ static bool applyMove(int fromIdx, int toIdx, const String &movedUid) {
   if (enPassantCapture) {
     moveText += " ep";
   }
+
+  lichessCtx = makeLichessContext();
+  if (!lichessAppendMove(lichessCtx, lichessSanMove)) {
+    bleFenLog(String("[WARN] LICHESS_APPEND_FAILED move=") + lichessSanMove + String(" raw=") + moveText);
+  }
+
+  requestLichessAutoPublish();
 
   Serial.print(F("[MOVE] "));
   Serial.println(moveText);
@@ -910,20 +1484,22 @@ static void runScanStateMachine() {
 }
 
 static void printHelp() {
-  Serial.println(F("[CMD] START | STOP | STATUS | F | S | V | C | T | B | L | HELP"));
+  Serial.println(F("[CMD] START | STOP | STATUS | F | S | V | C | T | B | L | CFG | CFG_SET|VERBOSE=0|CONTINUOUS=1|LETTERS=1 | WIFI | WIFI_SET|SSID=...|PASS=...|AUTO=1|CONNECT=1 | WIFI_SCAN | WIFI_SCAN_ITEM|IDX=n | LICHESS_PUBLISH | LICHESS_STATUS | LICHESS_STREAM_ON | LICHESS_STREAM_OFF | HELP"));
 }
 
 static bool handleBleCommand(const String &raw, String &response) {
   String cmd = raw;
   cmd.trim();
-  cmd.toUpperCase();
 
-  if (cmd.length() == 0) {
+  String cmdUpper = cmd;
+  cmdUpper.toUpperCase();
+
+  if (cmdUpper.length() == 0) {
     response = "EMPTY";
     return false;
   }
 
-  if (cmd == "START") {
+  if (cmdUpper == "START") {
     if (startAndLearnInitial32()) {
       response = "STARTED";
       return true;
@@ -937,7 +1513,7 @@ static bool handleBleCommand(const String &raw, String &response) {
     return false;
   }
 
-  if (cmd == "STOP") {
+  if (cmdUpper == "STOP") {
     gameStarted = false;
     abortTrackingRestoreSource();
 
@@ -964,13 +1540,25 @@ static bool handleBleCommand(const String &raw, String &response) {
     return true;
   }
 
-  if (cmd == "STATUS") {
+  if (cmdUpper == "STATUS") {
     response = gameStarted ? "RUNNING" : "IDLE";
     return true;
   }
 
-  if (cmd == "F" || cmd == "FEN") {
-    response = gameStarted ? buildCurrentFen() : String("NO_GAME");
+  bool handled = false;
+  if (handleCommonCommand(cmd, cmdUpper, response, handled)) {
+    return true;
+  }
+  if (handled) {
+    return false;
+  }
+
+  if (cmdUpper == "F" || cmdUpper == "FEN") {
+    if (gameStarted) {
+      response = String(buildCurrentFen());
+    } else {
+      response = "NO_GAME";
+    }
     if (!gameStarted) {
       bleFenLog(String("[WARN] NO_GAME | send START first"));
     }
@@ -978,7 +1566,7 @@ static bool handleBleCommand(const String &raw, String &response) {
   }
 
   response = "UNKNOWN_CMD";
-  bleFenLog(String("[ERR] UNKNOWN_CMD ") + cmd);
+  bleFenLog(String("[ERR] UNKNOWN_CMD ") + cmdUpper);
   return false;
 }
 
@@ -989,6 +1577,16 @@ static void printStatus() {
   Serial.print(occupiedCount);
   Serial.print(F(" state="));
   Serial.println((int)scanState);
+}
+
+static void printCfgStatus() {
+  Serial.print(F("[CFG] "));
+  Serial.println(buildSettingsPayload("CFG"));
+}
+
+static void printWifiStatus() {
+  Serial.print(F("[WIFI] "));
+  Serial.println(buildWifiPayload("WIFI"));
 }
 
 static void handleCommand(const String &raw) {
@@ -1048,22 +1646,28 @@ static void handleCommand(const String &raw) {
 
   if (cmd == "V") {
     scanVerbose = !scanVerbose;
+    saveSettingsAfterLocalChange();
     Serial.print(F("[SCAN] Verbose = "));
     Serial.println(scanVerbose ? F("ON") : F("OFF"));
+    printCfgStatus();
     return;
   }
 
   if (cmd == "C") {
     scanContinuous = !scanContinuous;
+    saveSettingsAfterLocalChange();
     Serial.print(F("[SCAN] Continuous = "));
     Serial.println(scanContinuous ? F("ON") : F("OFF"));
+    printCfgStatus();
     return;
   }
 
   if (cmd == "L") {
     scanUsePieceLetters = !scanUsePieceLetters;
+    saveSettingsAfterLocalChange();
     Serial.print(F("[SCAN] Letter view = "));
     Serial.println(scanUsePieceLetters ? F("ON") : F("OFF"));
+    printCfgStatus();
     return;
   }
 
@@ -1075,6 +1679,38 @@ static void handleCommand(const String &raw) {
   if (cmd == "B") {
     Serial.print(F("[BLE] connected="));
     Serial.println(bleFenIsConnected() ? F("YES") : F("NO"));
+    return;
+  }
+
+  String response;
+  bool handled = false;
+  handleCommonCommand(cmd, cmd, response, handled);
+  if (handled) {
+    if (response.length() > 0) {
+      bool isErr = response.startsWith("WIFI_ERR") || response.startsWith("CFG_ERR") || response.startsWith("LICHESS_ERR");
+      if (isErr) {
+        if (cmd.startsWith("WIFI")) {
+          Serial.print(F("[WIFI] ERR "));
+        } else if (cmd.startsWith("CFG")) {
+          Serial.print(F("[CFG] ERR "));
+        } else if (cmd.startsWith("LICHESS")) {
+          Serial.print(F("[LICHESS] ERR "));
+        } else {
+          Serial.print(F("[CMD] ERR "));
+        }
+      } else {
+        if (cmd.startsWith("WIFI")) {
+          Serial.print(F("[WIFI] "));
+        } else if (cmd.startsWith("CFG")) {
+          Serial.print(F("[CFG] "));
+        } else if (cmd.startsWith("LICHESS")) {
+          Serial.print(F("[LICHESS] "));
+        } else {
+          Serial.print(F("[CMD] "));
+        }
+      }
+      Serial.println(response);
+    }
     return;
   }
 
@@ -1116,9 +1752,28 @@ void smartChessBegin() {
   while (!Serial && millis() - t < 3000) {
   }
 
+  esp_task_wdt_init(10, true);
+  esp_task_wdt_add(NULL);
+
   initRfidScanner(mfrc522);
   bleFenBegin();
   bleFenSetCommandHandler(handleBleCommand);
+
+  settingsStoreReady = settingsStore.begin(SETTINGS_NS, false);
+  if (settingsStoreReady) {
+    loadSettingsFromStore();
+    loadWifiSettingsFromStore();
+    Serial.print(F("[CFG] Loaded "));
+    Serial.println(buildSettingsPayload("CFG"));
+    Serial.print(F("[WIFI] Loaded "));
+    Serial.println(buildWifiPayload("WIFI"));
+
+    if (wifiAutoConnect && wifiSavedSsid.length() > 0) {
+      startWifiConnect();
+    }
+  } else {
+    Serial.println(F("[CFG] Preferences init failed, using defaults"));
+  }
 
   byte version = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
   if (version == 0x00 || version == 0xFF) {
@@ -1139,7 +1794,44 @@ void smartChessTick() {
   bleFenPoll();
   processSerialCommands();
 
+  wl_status_t wifiStatus = WiFi.status();
+  bool wifiConnectedNow = (wifiStatus == WL_CONNECTED);
+
+  if (wifiConnectInProgress) {
+    if (wifiConnectedNow) {
+      wifiConnectInProgress = false;
+      wifiConnectFailed = false;
+      wifiLastError = "";
+      bleFenLog(String("[WIFI] CONNECTED ip=") + WiFi.localIP().toString());
+    } else if (wifiStatus == WL_CONNECT_FAILED) {
+      wifiConnectInProgress = false;
+      wifiConnectFailed = true;
+      wifiLastError = "AUTH";
+      bleFenLog(String("[WIFI] CONNECT_FAILED auth ssid=") + wifiSavedSsid);
+    } else if (wifiStatus == WL_NO_SSID_AVAIL) {
+      wifiConnectInProgress = false;
+      wifiConnectFailed = true;
+      wifiLastError = "NO_SSID";
+      bleFenLog(String("[WIFI] CONNECT_FAILED no_ssid ssid=") + wifiSavedSsid);
+    } else if (millis() - wifiConnectStartMs > WIFI_CONNECT_TIMEOUT_MS) {
+      wifiConnectInProgress = false;
+      wifiConnectFailed = true;
+      wifiLastError = "TIMEOUT";
+      bleFenLog(String("[WIFI] CONNECT_TIMEOUT ssid=") + wifiSavedSsid);
+    }
+  }
+
+  if (wifiConnectedNow != wifiLastConnected) {
+    wifiLastConnected = wifiConnectedNow;
+    if (!wifiConnectedNow && wifiAutoConnect && wifiSavedSsid.length() > 0) {
+      startWifiConnect();
+    }
+  }
+
+  processLichessUploadTick();
+
   if (!gameStarted) {
+    esp_task_wdt_reset();
     delay(1);
     return;
   }
@@ -1169,5 +1861,6 @@ void smartChessTick() {
     Serial.println((int)scanState);
   }
 
+  esp_task_wdt_reset();
   delay(1);
 }

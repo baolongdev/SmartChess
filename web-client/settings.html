@@ -1,0 +1,1053 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>SmartChess - Settings Sync</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .settings-wrap {
+      padding: 12px 16px;
+      overflow: auto;
+      display: grid;
+      gap: 12px;
+    }
+
+    .set-card {
+      border: 1px solid var(--border);
+      background: var(--bg-s);
+      padding: 12px;
+    }
+
+    .set-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px dashed rgba(59, 74, 96, 0.45);
+    }
+
+    .set-row:last-child {
+      border-bottom: 0;
+    }
+
+    .set-label {
+      font-size: 13px;
+      color: var(--tp);
+    }
+
+    .set-desc {
+      font-size: 11px;
+      color: var(--tm);
+      margin-top: 2px;
+    }
+
+    .set-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--tm);
+    }
+
+    .set-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .switch {
+      position: relative;
+      width: 48px;
+      height: 24px;
+      border: 1px solid var(--border);
+      background: #0f1720;
+      cursor: pointer;
+    }
+
+    .switch::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      background: #7a8799;
+      transition: transform 0.2s ease;
+    }
+
+    .switch.on {
+      border-color: rgba(63, 182, 139, 0.45);
+      background: rgba(63, 182, 139, 0.12);
+    }
+
+    .switch.on::after {
+      transform: translateX(24px);
+      background: #6de0b5;
+    }
+
+    .status-line {
+      font-size: 12px;
+      color: var(--ta);
+    }
+
+    .set-card > .sec-head {
+      padding: 0 0 8px 0;
+      height: 36px;
+      display: flex;
+      border-bottom: 0;
+      background: var(--bg-s);
+      align-items: center;
+      position: sticky;
+      top: -12px;
+      z-index: 6;
+    }
+
+    .wifi-input {
+      width: 100%;
+      box-sizing: border-box;
+      background: #0f1720;
+      border: 1px solid var(--border);
+      color: var(--tp);
+      font-family: var(--font);
+      font-size: 12px;
+      padding: 6px 8px;
+    }
+
+    .wifi-input:focus {
+      outline: none;
+      border-color: var(--tb);
+    }
+
+    .wifi-ssid-select {
+      width: 100%;
+      box-sizing: border-box;
+      background: #0f1720;
+      border: 1px solid var(--border);
+      color: var(--tp);
+      font-family: var(--font);
+      font-size: 12px;
+      padding: 6px 8px;
+      height: 34px;
+    }
+
+    .wifi-ssid-select:focus {
+      outline: none;
+      border-color: var(--tb);
+    }
+
+    .wifi-ssid-select.expanded {
+      height: auto;
+      max-height: 220px;
+    }
+
+    .wifi-ssid-select option {
+      padding: 4px 8px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <div class="hdr-prompt">
+        <span class="c-g">user[pro]</span><span class="c-m">@</span><span class="c-b">SmartChess</span>
+        <span class="c-m"> $ </span><span class="c-t">settings --sync ble</span><span class="cursor"></span>
+      </div>
+      <div class="hdr-sub">// localStorage <-> ESP32 settings sync</div>
+      <div class="hdr-pills">
+        <span id="bleStatus" class="pill disconnected">Disconnected</span>
+        <span id="deviceName" class="pill pill-blue">Device: -</span>
+        <a href="games.html" class="pill pill-purple">Games: <span id="gamesCount">0</span></a>
+        <a href="index.html" class="pill pill-cfg">Board</a>
+      </div>
+    </header>
+
+    <section id="actionbar">
+      <button id="btnScan" class="btn btn-scan">[ ] scan + connect</button>
+      <button id="btnPull" class="btn">[ ] pull from esp32</button>
+      <button id="btnPush" class="btn">[ ] push to esp32</button>
+      <button id="btnSaveLocal" class="btn btn-start">[ ] save local</button>
+    </section>
+
+    <p id="message" class="message">// manage settings profile and sync</p>
+
+    <div class="settings-wrap">
+      <section class="set-card">
+        <div class="sec-head">
+          <span class="sec-title c-b">scan settings</span>
+          <span class="sec-meta">synced with esp32</span>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Verbose scan log</div>
+            <div class="set-desc">Show detailed scan output in serial/log flow.</div>
+          </div>
+          <button class="switch" id="swVerbose" aria-label="toggle verbose"></button>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Continuous scan print</div>
+            <div class="set-desc">Keep printing compact scan snapshots during game.</div>
+          </div>
+          <button class="switch" id="swContinuous" aria-label="toggle continuous"></button>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Piece letter view</div>
+            <div class="set-desc">Render piece letters in scan matrix view.</div>
+          </div>
+          <button class="switch" id="swLetters" aria-label="toggle letters"></button>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Auto Lichess publish</div>
+            <div class="set-desc">Board page auto-uploads finished game to Lichess.</div>
+          </div>
+          <button class="switch on" id="swAutoLichess" aria-label="always on" disabled>ON</button>
+        </div>
+      </section>
+
+      <section class="set-card">
+        <div class="sec-head">
+          <span class="sec-title c-a">wifi settings</span>
+          <span class="sec-meta">stored on esp32</span>
+        </div>
+
+        <div class="set-row" style="display: block;">
+          <div class="set-label">Wi-Fi SSID</div>
+          <div class="set-desc">Network name the ESP32 should connect to.</div>
+          <select id="wifiSsidList" class="wifi-ssid-select" style="margin-top: 6px;"></select>
+        </div>
+
+        <div class="set-row" style="display: block;">
+          <div class="set-label">Wi-Fi Password</div>
+          <div class="set-desc">Leave empty if open network.</div>
+          <input id="wifiPass" type="password" class="wifi-input" placeholder="Password" style="margin-top: 6px;" />
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Auto reconnect</div>
+            <div class="set-desc">ESP32 auto-connects using saved credentials.</div>
+          </div>
+          <button class="switch" id="swWifiAuto" aria-label="toggle wifi auto"></button>
+        </div>
+
+        <div class="set-actions" style="margin-top: 10px;">
+          <button id="btnWifiSave" class="btn btn-start">[ ] save wifi to esp32</button>
+          <button id="btnWifiRefresh" class="btn">[ ] scan wifi</button>
+          <button id="btnWifiConnect" class="btn">[ ] connect wifi now</button>
+          <button id="btnWifiDisconnect" class="btn btn-end">[ ] disconnect wifi</button>
+        </div>
+      </section>
+
+      <section class="set-card">
+        <div class="set-meta">
+          <span>Local version: <b id="metaLocalVer">1</b></span>
+          <span>ESP32 version: <b id="metaEspVer">-</b></span>
+          <span>Wi-Fi version: <b id="metaWifiVer">-</b></span>
+          <span>Wi-Fi status: <b id="metaWifiStatus">-</b></span>
+          <span>IP: <b id="metaWifiIp">-</b></span>
+          <span>Last sync: <b id="metaSyncAt">-</b></span>
+        </div>
+        <div class="set-actions" style="margin-top: 10px;">
+          <button id="btnAutoSync" class="btn">[x] auto-sync on connect</button>
+        </div>
+        <div id="statusLine" class="status-line" style="margin-top: 10px;">Idle</div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+const DEVICE_NAME = "SmartChess-ESP32S3";
+const SERVICE_UUID = "3f0e0001-70a1-4f8a-a6a3-51e9590e9f20";
+const CMD_CHAR_UUID = "3f0e0003-70a1-4f8a-a6a3-51e9590e9f20";
+const DB_KEY = "smartchess_games";
+const SETTINGS_DB_KEY = "smartchess_settings";
+const SETTINGS_UI_KEY = "smartchess_settings_ui";
+
+let bleDevice = null;
+let bleServer = null;
+let cmdCharacteristic = null;
+let connected = false;
+let commandBusy = false;
+let localCfg = {
+  version: 1,
+  verbose: false,
+  continuous: true,
+  letters: true,
+  autoLichess: true,
+  updatedAt: "",
+  source: "local",
+};
+let espCfg = null;
+let wifiCfg = null;
+let wifiScanList = [];
+let autoSyncOnConnect = true;
+const WIFI_SELECT_VISIBLE_ROWS = 8;
+
+const els = {
+  bleStatus: document.getElementById("bleStatus"),
+  deviceName: document.getElementById("deviceName"),
+  gamesCount: document.getElementById("gamesCount"),
+  message: document.getElementById("message"),
+  btnScan: document.getElementById("btnScan"),
+  btnPull: document.getElementById("btnPull"),
+  btnPush: document.getElementById("btnPush"),
+  btnSaveLocal: document.getElementById("btnSaveLocal"),
+  btnWifiSave: document.getElementById("btnWifiSave"),
+  btnWifiConnect: document.getElementById("btnWifiConnect"),
+  btnWifiDisconnect: document.getElementById("btnWifiDisconnect"),
+  btnWifiRefresh: document.getElementById("btnWifiRefresh"),
+  btnAutoSync: document.getElementById("btnAutoSync"),
+  swVerbose: document.getElementById("swVerbose"),
+  swContinuous: document.getElementById("swContinuous"),
+  swLetters: document.getElementById("swLetters"),
+  swAutoLichess: document.getElementById("swAutoLichess"),
+  swWifiAuto: document.getElementById("swWifiAuto"),
+  wifiSsidList: document.getElementById("wifiSsidList"),
+  wifiPass: document.getElementById("wifiPass"),
+  metaLocalVer: document.getElementById("metaLocalVer"),
+  metaEspVer: document.getElementById("metaEspVer"),
+  metaWifiVer: document.getElementById("metaWifiVer"),
+  metaWifiStatus: document.getElementById("metaWifiStatus"),
+  metaWifiIp: document.getElementById("metaWifiIp"),
+  metaSyncAt: document.getElementById("metaSyncAt"),
+  statusLine: document.getElementById("statusLine"),
+};
+
+function setMessage(text, isErr = false) {
+  els.message.textContent = text;
+  els.message.style.color = isErr ? "#ff8e8e" : "#ffb454";
+}
+
+function updateGamesCount() {
+  try {
+    const raw = localStorage.getItem(DB_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    const games = Array.isArray(arr) ? arr : (Array.isArray(arr?.games) ? arr.games : []);
+    els.gamesCount.textContent = String(games.length);
+  } catch (e) {
+    els.gamesCount.textContent = "0";
+  }
+}
+
+function readUiPrefs() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_UI_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    autoSyncOnConnect = data.autoSyncOnConnect !== false;
+  } catch (e) {
+  }
+}
+
+function saveUiPrefs() {
+  try {
+    localStorage.setItem(SETTINGS_UI_KEY, JSON.stringify({ autoSyncOnConnect }));
+  } catch (e) {
+  }
+}
+
+function readLocalCfg() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_DB_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+    localCfg = {
+      version: Math.max(1, Number(parsed.version) || 1),
+      verbose: Boolean(parsed.verbose),
+      continuous: parsed.continuous !== false,
+      letters: parsed.letters !== false,
+      autoLichess: true,
+      updatedAt: parsed.updatedAt || "",
+      source: parsed.source || "local",
+    };
+  } catch (e) {
+  }
+}
+
+function writeLocalCfg() {
+  localCfg.autoLichess = true;
+  localCfg.updatedAt = new Date().toISOString();
+  localCfg.source = "local";
+  try {
+    localStorage.setItem(SETTINGS_DB_KEY, JSON.stringify(localCfg));
+  } catch (e) {
+  }
+}
+
+function renderSwitch(el, on) {
+  if (!el) return;
+  el.classList.toggle("on", on);
+  el.textContent = on ? "ON" : "OFF";
+}
+
+function collapseWifiSsidSelect() {
+  if (!els.wifiSsidList) return;
+  els.wifiSsidList.size = 1;
+  els.wifiSsidList.classList.remove("expanded");
+}
+
+function expandWifiSsidSelect() {
+  if (!els.wifiSsidList) return;
+  const optCount = Math.max(1, els.wifiSsidList.options.length);
+  els.wifiSsidList.size = Math.min(WIFI_SELECT_VISIBLE_ROWS, optCount);
+  els.wifiSsidList.classList.add("expanded");
+}
+
+function renderWifiSsidSelect() {
+  if (!els.wifiSsidList) return;
+
+  const current = wifiCfg?.ssid || "";
+  const map = new Map();
+  if (current) {
+    map.set(current, current);
+  }
+  for (const ssid of wifiScanList) {
+    if (ssid) {
+      map.set(ssid, ssid);
+    }
+  }
+
+  if (map.size === 0) {
+    els.wifiSsidList.innerHTML = '<option value="">No SSID found (scan wifi)</option>';
+    return;
+  }
+
+  els.wifiSsidList.innerHTML = Array.from(map.values())
+    .map((ssid) => `<option value="${ssid}">${ssid}</option>`)
+    .join("");
+
+  els.wifiSsidList.value = current || Array.from(map.values())[0];
+  if (document.activeElement !== els.wifiSsidList) {
+    collapseWifiSsidSelect();
+  }
+}
+
+function renderUi() {
+  renderSwitch(els.swVerbose, localCfg.verbose);
+  renderSwitch(els.swContinuous, localCfg.continuous);
+  renderSwitch(els.swLetters, localCfg.letters);
+  localCfg.autoLichess = true;
+  renderSwitch(els.swAutoLichess, true);
+
+  els.metaLocalVer.textContent = String(localCfg.version || 1);
+  els.metaEspVer.textContent = espCfg ? String(espCfg.version || 1) : "-";
+  els.metaWifiVer.textContent = wifiCfg ? String(wifiCfg.version || 1) : "-";
+  els.metaWifiStatus.textContent = wifiCfg ? (wifiCfg.status || "-") : "-";
+  els.metaWifiIp.textContent = wifiCfg ? (wifiCfg.ip || "-") : "-";
+  els.metaSyncAt.textContent = localCfg.updatedAt ? new Date(localCfg.updatedAt).toLocaleString("en-GB") : "-";
+
+  renderWifiSsidSelect();
+  if (els.swWifiAuto) {
+    renderSwitch(els.swWifiAuto, wifiCfg ? Boolean(wifiCfg.auto) : true);
+  }
+
+  els.bleStatus.textContent = connected ? "Connected" : "Disconnected";
+  els.bleStatus.className = `pill ${connected ? "connected" : "disconnected"}`;
+  els.btnScan.textContent = `[${connected ? "x" : " "}] ${connected ? "disconnect" : "scan + connect"}`;
+  els.btnScan.classList.toggle("btn-scan", !connected);
+  els.btnScan.classList.toggle("btn-end", connected);
+
+  els.btnPull.disabled = !connected || commandBusy;
+  els.btnPush.disabled = !connected || commandBusy;
+  els.btnWifiSave.disabled = !connected || commandBusy;
+  els.btnWifiConnect.disabled = !connected || commandBusy;
+  els.btnWifiDisconnect.disabled = !connected || commandBusy;
+  els.btnWifiRefresh.disabled = !connected || commandBusy;
+  els.wifiSsidList.disabled = !connected || commandBusy;
+  els.wifiPass.disabled = !connected || commandBusy;
+  els.swWifiAuto.disabled = !connected || commandBusy;
+  els.swAutoLichess.disabled = true;
+  els.btnSaveLocal.disabled = commandBusy;
+  els.btnScan.disabled = commandBusy;
+
+  els.btnAutoSync.textContent = `[${autoSyncOnConnect ? "x" : " "}] auto-sync on connect`;
+}
+
+function parseCfgPayload(text) {
+  if (!text) return null;
+  const normalized = text.replace(/^OK:\s*/i, "").trim();
+  if (!(normalized.startsWith("CFG") || normalized.startsWith("CFG_SAVED"))) {
+    return null;
+  }
+
+  const out = {};
+  const parts = normalized.split("|");
+  for (const part of parts) {
+    const p = part.indexOf("=");
+    if (p > 0) {
+      out[part.slice(0, p).trim()] = part.slice(p + 1).trim();
+    }
+  }
+
+  const toBool = (v, fallback) => {
+    if (v === undefined) return fallback;
+    const t = String(v).toLowerCase();
+    return t === "1" || t === "true" || t === "on" || t === "yes";
+  };
+
+  return {
+    version: Math.max(1, parseInt(out.ver, 10) || 1),
+    verbose: toBool(out.verbose, false),
+    continuous: toBool(out.continuous, true),
+    letters: toBool(out.letters, true),
+    updatedAt: new Date().toISOString(),
+    source: "esp32",
+  };
+}
+
+function buildCfgSetCommand(cfg) {
+  return `CFG_SET|VER=${cfg.version}|VERBOSE=${cfg.verbose ? 1 : 0}|CONTINUOUS=${cfg.continuous ? 1 : 0}|LETTERS=${cfg.letters ? 1 : 0}`;
+}
+
+function parseWifiPayload(text) {
+  if (!text) return null;
+  const normalized = text.replace(/^OK:\s*/i, "").trim();
+  if (!/^WIFI/i.test(normalized)) {
+    return null;
+  }
+
+  const out = {};
+  const parts = normalized.split("|");
+  for (const part of parts) {
+    const p = part.indexOf("=");
+    if (p > 0) {
+      out[part.slice(0, p).trim().toLowerCase()] = part.slice(p + 1).trim();
+    }
+  }
+
+  const autoToken = String(out.auto ?? "1").toLowerCase();
+  return {
+    version: Math.max(1, parseInt(out.ver, 10) || 1),
+    ssid: out.ssid || "",
+    auto: autoToken === "1" || autoToken === "true" || autoToken === "on" || autoToken === "yes",
+    status: out.status || "-",
+    ip: out.ip || "-",
+  };
+}
+
+function parseWifiScanPayload(text) {
+  if (!text) return [];
+  const normalized = text.replace(/^OK:\s*/i, "").trim();
+  if (!normalized.startsWith("WIFI_SCAN")) {
+    return [];
+  }
+
+  if (/^WIFI_SCAN\|count=\d+$/i.test(normalized)) {
+    return [];
+  }
+
+  const list = [];
+  const parts = normalized.split("|");
+  for (const part of parts) {
+    const p = part.indexOf("=");
+    if (p <= 0) continue;
+    const key = part.slice(0, p).trim().toLowerCase();
+    const value = part.slice(p + 1).trim();
+    if (/^ssid\d+$/.test(key) && value.length > 0) {
+      list.push(value);
+    }
+  }
+
+  return list;
+}
+
+function buildWifiSetCommand({ ssid, pass, auto, ver, connect = false }) {
+  const safeSsid = String(ssid || "").replace(/\|/g, " ").trim();
+  const safePass = String(pass || "").replace(/\|/g, " ");
+  const safeVer = Math.max(1, Number(ver) || 1);
+  return `WIFI_SET|VER=${safeVer}|SSID=${safeSsid}|PASS=${safePass}|AUTO=${auto ? 1 : 0}|CONNECT=${connect ? 1 : 0}`;
+}
+
+async function sendDeviceCommand(cmd) {
+  if (!cmdCharacteristic) {
+    throw new Error("CMD characteristic not available");
+  }
+
+  const payload = new TextEncoder().encode(cmd);
+  if (typeof cmdCharacteristic.writeValueWithoutResponse === "function") {
+    await cmdCharacteristic.writeValueWithoutResponse(payload);
+  } else {
+    await cmdCharacteristic.writeValue(payload);
+  }
+
+  for (let i = 0; i < 8; i++) {
+    const val = await cmdCharacteristic.readValue();
+    const ack = new TextDecoder().decode(val).trim();
+    if (/^(OK:|ERR:)/i.test(ack)) {
+      return ack;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
+  }
+
+  throw new Error("No ACK from device");
+}
+
+async function sendDeviceCommandWithRetry(cmd, retries = 2, retryDelayMs = 120) {
+  let lastErr = null;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await sendDeviceCommand(cmd);
+    } catch (err) {
+      lastErr = err;
+      if (i === retries) {
+        break;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, retryDelayMs + i * 80));
+    }
+  }
+  throw lastErr || new Error("Command failed");
+}
+
+async function connectBle() {
+  bleDevice = await navigator.bluetooth.requestDevice({
+    filters: [{ name: DEVICE_NAME }],
+    optionalServices: [SERVICE_UUID],
+  });
+
+  bleServer = await bleDevice.gatt.connect();
+  const service = await bleServer.getPrimaryService(SERVICE_UUID);
+  cmdCharacteristic = await service.getCharacteristic(CMD_CHAR_UUID);
+
+  connected = true;
+  els.deviceName.textContent = `Device: ${bleDevice.name || bleDevice.id}`;
+  setMessage("Connected to ESP32 settings channel.");
+  renderUi();
+
+  if (autoSyncOnConnect) {
+    await syncOnConnect();
+  }
+  await pullWifiFromEsp();
+  await scanWifiNetworks();
+}
+
+async function disconnectBle() {
+  if (bleDevice?.gatt?.connected) {
+    bleDevice.gatt.disconnect();
+  }
+  connected = false;
+  cmdCharacteristic = null;
+  bleServer = null;
+  setMessage("Disconnected");
+  renderUi();
+}
+
+async function pullFromEsp() {
+  commandBusy = true;
+  renderUi();
+  try {
+    const ack = await sendDeviceCommand("CFG_GET");
+    const parsed = parseCfgPayload(ack);
+    if (!parsed) {
+      throw new Error(ack || "CFG parse failed");
+    }
+
+    espCfg = parsed;
+    localCfg = {
+      ...parsed,
+      autoLichess: true,
+      source: "esp32",
+    };
+    localStorage.setItem(SETTINGS_DB_KEY, JSON.stringify(localCfg));
+    els.statusLine.textContent = `Pulled from ESP32 (ver ${parsed.version})`;
+    setMessage(`Pulled settings: ${ack}`);
+  } finally {
+    commandBusy = false;
+    renderUi();
+  }
+}
+
+async function pushToEsp() {
+  if (!connected) return;
+  commandBusy = true;
+  renderUi();
+  try {
+    const ver = Math.max(localCfg.version || 1, espCfg?.version || 1) + 1;
+    const toSend = {
+      version: ver,
+      verbose: Boolean(localCfg.verbose),
+      continuous: Boolean(localCfg.continuous),
+      letters: Boolean(localCfg.letters),
+    };
+
+    const ack = await sendDeviceCommand(buildCfgSetCommand(toSend));
+    const parsed = parseCfgPayload(ack);
+    if (!parsed) {
+      throw new Error(ack || "CFG save failed");
+    }
+
+    espCfg = parsed;
+    localCfg = {
+      ...parsed,
+      autoLichess: true,
+      source: "esp32",
+    };
+    localStorage.setItem(SETTINGS_DB_KEY, JSON.stringify(localCfg));
+    els.statusLine.textContent = `Pushed to ESP32 (ver ${parsed.version})`;
+    setMessage(`Saved to ESP32: ${ack}`);
+    await pullWifiFromEsp();
+  } finally {
+    commandBusy = false;
+    renderUi();
+  }
+}
+
+async function syncOnConnect() {
+  const localRaw = (() => {
+    try {
+      const raw = localStorage.getItem(SETTINGS_DB_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  })();
+
+  await pullFromEsp();
+
+  if (!localRaw || typeof localRaw !== "object") {
+    return;
+  }
+
+  const localVer = Number(localRaw.version) || 1;
+  const espVer = Number(espCfg?.version) || 1;
+  const valueChanged = (
+    Boolean(localRaw.verbose) !== Boolean(espCfg?.verbose) ||
+    Boolean(localRaw.continuous) !== Boolean(espCfg?.continuous) ||
+    Boolean(localRaw.letters) !== Boolean(espCfg?.letters)
+  );
+
+  if (localVer > espVer || (localVer === espVer && valueChanged)) {
+    localCfg = {
+      version: localVer,
+      verbose: Boolean(localRaw.verbose),
+      continuous: localRaw.continuous !== false,
+      letters: localRaw.letters !== false,
+      autoLichess: true,
+      updatedAt: localRaw.updatedAt || "",
+      source: "local",
+    };
+    await pushToEsp();
+  }
+}
+
+async function refreshAllFromEsp() {
+  await pullFromEsp();
+  await pullWifiFromEsp();
+}
+
+async function pullWifiFromEsp() {
+  const hadBusy = commandBusy;
+  if (!hadBusy) {
+    commandBusy = true;
+    renderUi();
+  }
+  try {
+    const ack = await sendDeviceCommand("WIFI_GET");
+    const parsed = parseWifiPayload(ack);
+    if (!parsed) {
+      throw new Error(ack || "WIFI parse failed");
+    }
+    wifiCfg = parsed;
+    els.statusLine.textContent = `Wi-Fi profile read (ver ${parsed.version})`;
+  } finally {
+    if (!hadBusy) {
+      commandBusy = false;
+      renderUi();
+    }
+  }
+}
+
+async function waitWifiResult(maxMs = 18000) {
+  if (!connected) return;
+
+  const start = Date.now();
+  let lastStatus = "CONNECTING";
+
+  while (Date.now() - start < maxMs) {
+    await new Promise((resolve) => window.setTimeout(resolve, 900));
+    const ack = await sendDeviceCommandWithRetry("WIFI_GET", 1, 120);
+    const parsed = parseWifiPayload(ack);
+    if (!parsed) {
+      continue;
+    }
+
+    wifiCfg = parsed;
+    lastStatus = parsed.status || "DISCONNECTED";
+    renderUi();
+
+    if (lastStatus === "CONNECTED") {
+      els.statusLine.textContent = `Wi-Fi connected (${parsed.ip || "0.0.0.0"})`;
+      setMessage(`Wi-Fi connected to ${parsed.ssid}`);
+      return;
+    }
+
+    if (lastStatus !== "CONNECTING") {
+      els.statusLine.textContent = `Wi-Fi status: ${lastStatus}`;
+      setMessage(`Wi-Fi result: ${lastStatus}`, true);
+      return;
+    }
+  }
+
+  els.statusLine.textContent = `Wi-Fi status: ${lastStatus} (timeout)`;
+  setMessage("Wi-Fi connect timeout. Check SSID/password.", true);
+}
+
+async function saveWifiToEsp(connectNow = false) {
+  if (!connected) return;
+  const ssid = (els.wifiSsidList.value || "").trim();
+  if (!ssid) {
+    throw new Error("SSID is required");
+  }
+
+  const pass = els.wifiPass.value || "";
+  const auto = wifiCfg ? Boolean(wifiCfg.auto) : true;
+  const ver = Math.max(wifiCfg?.version || 1, 1) + 1;
+
+  commandBusy = true;
+  renderUi();
+  try {
+    const ack = await sendDeviceCommand(buildWifiSetCommand({
+      ssid,
+      pass,
+      auto,
+      ver,
+      connect: connectNow,
+    }));
+    const parsed = parseWifiPayload(ack);
+    if (!parsed) {
+      throw new Error(ack || "WIFI save failed");
+    }
+    wifiCfg = parsed;
+    els.wifiPass.value = "";
+    els.statusLine.textContent = connectNow
+      ? `Wi-Fi saved + connect started (${parsed.status})`
+      : `Wi-Fi saved on ESP32 (ver ${parsed.version})`;
+    setMessage(`Wi-Fi updated: ${ack}`);
+
+    if (connectNow) {
+      await waitWifiResult(18000);
+    }
+  } finally {
+    commandBusy = false;
+    renderUi();
+  }
+}
+
+async function wifiConnectNow() {
+  if (!connected) return;
+  commandBusy = true;
+  renderUi();
+  try {
+    const ack = await sendDeviceCommand("WIFI_CONNECT");
+    const parsed = parseWifiPayload(ack);
+    if (parsed) {
+      wifiCfg = parsed;
+    }
+    els.statusLine.textContent = "Wi-Fi connect command sent";
+    setMessage(`Wi-Fi connect: ${ack}`);
+
+    await waitWifiResult(18000);
+  } finally {
+    commandBusy = false;
+    renderUi();
+  }
+}
+
+async function wifiDisconnectNow() {
+  if (!connected) return;
+  commandBusy = true;
+  renderUi();
+  try {
+    const ack = await sendDeviceCommand("WIFI_DISCONNECT");
+    const parsed = parseWifiPayload(ack);
+    if (parsed) {
+      wifiCfg = parsed;
+    }
+    els.statusLine.textContent = "Wi-Fi disconnected";
+    setMessage(`Wi-Fi disconnect: ${ack}`);
+  } finally {
+    commandBusy = false;
+    renderUi();
+  }
+}
+
+async function scanWifiNetworks() {
+  if (!connected) return;
+  commandBusy = true;
+  renderUi();
+  try {
+    const ack = await sendDeviceCommandWithRetry("WIFI_SCAN", 3, 180);
+    const normalized = ack.replace(/^OK:\s*/i, "").trim();
+    const countMatch = normalized.match(/\bcount=(\d+)\b/i);
+    const scanCount = countMatch ? Math.max(0, parseInt(countMatch[1], 10) || 0) : 0;
+    const errMatch = normalized.match(/\berr=([^|]*)/i);
+    const scanErr = errMatch ? errMatch[1].trim().toUpperCase() : "";
+
+    const baseList = parseWifiScanPayload(ack);
+
+    if (baseList.length > 0) {
+      wifiScanList = baseList;
+    } else {
+      const collected = [];
+      for (let i = 0; i < scanCount; i++) {
+        const itemAck = await sendDeviceCommandWithRetry(`WIFI_SCAN_ITEM|IDX=${i}`, 2, 120);
+        const itemNorm = itemAck.replace(/^OK:\s*/i, "").trim();
+        const ssidMatch = itemNorm.match(/\bssid=(.*)$/i);
+        if (ssidMatch) {
+          const ssid = ssidMatch[1].trim();
+          if (ssid.length > 0) {
+            collected.push(ssid);
+          }
+        }
+      }
+      wifiScanList = collected;
+    }
+
+    if (wifiScanList.length > 0) {
+      els.statusLine.textContent = `Scanned ${wifiScanList.length} Wi-Fi network(s)`;
+      setMessage("Wi-Fi scan complete.");
+    } else {
+      if (scanErr === "SCAN_FAIL") {
+        els.statusLine.textContent = "Wi-Fi scan failed on ESP32";
+        setMessage("Wi-Fi scan failed. Retry scan or reconnect BLE.", true);
+      } else {
+        els.statusLine.textContent = "No Wi-Fi found in scan";
+        setMessage("No SSID found. Move ESP32 closer and scan again.", true);
+      }
+    }
+  } finally {
+    commandBusy = false;
+    renderUi();
+  }
+}
+
+function toggleField(key) {
+  localCfg[key] = !localCfg[key];
+  renderUi();
+}
+
+els.btnScan.addEventListener("click", async () => {
+  try {
+    if (connected) {
+      await disconnectBle();
+    } else {
+      await connectBle();
+    }
+  } catch (e) {
+    setMessage(e.message || String(e), true);
+  }
+});
+
+els.btnPull.addEventListener("click", async () => {
+  try {
+    await refreshAllFromEsp();
+  } catch (e) {
+    setMessage(e.message || String(e), true);
+    els.statusLine.textContent = "Pull failed";
+  }
+});
+
+els.btnPush.addEventListener("click", async () => {
+  try {
+    await pushToEsp();
+  } catch (e) {
+    setMessage(e.message || String(e), true);
+    els.statusLine.textContent = "Push failed";
+  }
+});
+
+els.btnSaveLocal.addEventListener("click", () => {
+  writeLocalCfg();
+  els.statusLine.textContent = `Saved local profile (ver ${localCfg.version})`;
+  setMessage("Local settings saved. Use push to send to ESP32.");
+  renderUi();
+});
+
+els.swVerbose.addEventListener("click", () => toggleField("verbose"));
+els.swContinuous.addEventListener("click", () => toggleField("continuous"));
+els.swLetters.addEventListener("click", () => toggleField("letters"));
+els.swAutoLichess.addEventListener("click", () => {
+  localCfg.autoLichess = true;
+  renderUi();
+});
+
+els.btnAutoSync.addEventListener("click", () => {
+  autoSyncOnConnect = !autoSyncOnConnect;
+  saveUiPrefs();
+  renderUi();
+});
+
+els.btnWifiSave.addEventListener("click", async () => {
+  try {
+    await saveWifiToEsp(false);
+  } catch (e) {
+    setMessage(e.message || String(e), true);
+    els.statusLine.textContent = "Wi-Fi save failed";
+  }
+});
+
+els.btnWifiConnect.addEventListener("click", async () => {
+  try {
+    await saveWifiToEsp(true);
+  } catch (e) {
+    setMessage(e.message || String(e), true);
+    els.statusLine.textContent = "Wi-Fi connect failed";
+  }
+});
+
+els.btnWifiDisconnect.addEventListener("click", async () => {
+  try {
+    await wifiDisconnectNow();
+  } catch (e) {
+    setMessage(e.message || String(e), true);
+    els.statusLine.textContent = "Wi-Fi disconnect failed";
+  }
+});
+
+els.btnWifiRefresh.addEventListener("click", async () => {
+  try {
+    await scanWifiNetworks();
+  } catch (e) {
+    setMessage(e.message || String(e), true);
+    els.statusLine.textContent = "Wi-Fi scan failed";
+  }
+});
+
+els.swWifiAuto.addEventListener("click", () => {
+  if (!wifiCfg) {
+    wifiCfg = { version: 1, ssid: "", auto: true, status: "-", ip: "-" };
+  }
+  wifiCfg.auto = !wifiCfg.auto;
+  renderUi();
+});
+
+els.wifiSsidList.addEventListener("focus", () => {
+  expandWifiSsidSelect();
+});
+
+els.wifiSsidList.addEventListener("blur", () => {
+  collapseWifiSsidSelect();
+});
+
+els.wifiSsidList.addEventListener("change", () => {
+  collapseWifiSsidSelect();
+});
+
+readUiPrefs();
+readLocalCfg();
+updateGamesCount();
+renderUi();
+  </script>
+</body>
+</html>
