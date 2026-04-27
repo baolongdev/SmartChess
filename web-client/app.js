@@ -7,6 +7,8 @@ const DB_KEY = "smartchess_games";
 const SETTINGS_DB_KEY = "smartchess_settings";
 const DEFAULT_START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const LICHESS_POLL_TIMEOUT_MS = 45000;
+const FEN_SOUND_SRC = "assets/audio_c12b07d680.mp3";
+const WRONG_TURN_SOUND_SRC = "assets/audio_dc7efeb311.mp3";
 
 const PIECE_UNICODE = {
   P: "♙",
@@ -55,10 +57,12 @@ let turnStartMs = null;
 let lastMoveDeltaMs = 0;
 let uiTick = null;
 let audioCtx = null;
+let fenSoundFx = null;
+let wrongTurnSoundFx = null;
 let wheelLockUntilMs = 0;
 let lastRenderedFen = null;
 let resignActionPending = false;
-let wrongTurnAlarmTimer = null;
+let wrongTurnAlarmActive = false;
 const textDecoder = new TextDecoder();
 let webLogCount = 0;
 let toastTimer = null;
@@ -191,6 +195,69 @@ function prettifyCmdError(ackText) {
   }
 
   return "";
+}
+
+function pieceNameFromFenChar(piece) {
+  if (!piece || piece === ".") return "piece";
+
+  const baseMap = {
+    P: "pawn",
+    N: "knight",
+    B: "bishop",
+    R: "rook",
+    Q: "queen",
+    K: "king",
+  };
+
+  const upper = String(piece).toUpperCase();
+  const base = baseMap[upper] || "piece";
+  const isWhite = piece === upper;
+  return `${isWhite ? "white" : "black"} ${base}`;
+}
+
+function pieceAtSquareFromFen(fen, squareName) {
+  const sq = String(squareName || "").trim().toLowerCase();
+  if (!/^[a-h][1-8]$/.test(sq)) {
+    return "";
+  }
+
+  const parsed = decodeFEN(fen || "");
+  if (!parsed) {
+    return "";
+  }
+
+  const board = boardFromPlacement(parsed.placement);
+  if (!board) {
+    return "";
+  }
+
+  const file = sq.charCodeAt(0) - 97;
+  const rank = parseInt(sq.slice(1), 10);
+  const row = 8 - rank;
+  if (row < 0 || row > 7 || file < 0 || file > 7) {
+    return "";
+  }
+
+  const piece = board[row]?.[file] || ".";
+  return piece === "." ? "" : piece;
+}
+
+function buildWrongTurnToast(line) {
+  const match = String(line || "").match(/WRONG_TURN\s+expected=(white|black)\s+got=(white|black)\s+at\s+([a-h][1-8])/i);
+  if (!match) {
+    return "Wrong turn. Put the piece back and play the correct side.";
+  }
+
+  const expected = String(match[1] || "").toLowerCase();
+  const got = String(match[2] || "").toLowerCase();
+  const square = String(match[3] || "").toLowerCase();
+
+  const liveFen = String(els.currentFen?.textContent || "").trim();
+  const fenPiece = pieceAtSquareFromFen(liveFen, square);
+  const pieceLabel = fenPiece ? pieceNameFromFenChar(fenPiece) : `${got} piece`;
+
+  const expectedSide = expected === "black" ? "Black" : "White";
+  return `Wrong turn: ${expectedSide} to move. You lifted ${pieceLabel} at ${square}. Put it back.`;
 }
 
 function addLogLine(level, text) {
@@ -345,7 +412,7 @@ async function sendDeviceCommand(cmd) {
 function onDeviceLogNotify(event) {
   const line = textDecoder.decode(event.target.value).trim();
   if (!line) return;
-  const level = /\bERR:|FAILED|UNKNOWN|NO_GAME|START_FAILED|NO_ACK/i.test(line) ? "err" : "info";
+  const level = /\[ERR\]|\bERR:|FAILED|UNKNOWN|NO_GAME|START_FAILED|NO_ACK/i.test(line) ? "err" : "info";
   addLogLine(level, line);
 
   if (/WRONG_TURN/i.test(line)) {
@@ -377,7 +444,11 @@ function onDeviceLogNotify(event) {
   }
 
   if (level === "err") {
-    if (/START_FAILED:MISSING_PIECES:/i.test(line)) {
+    if (/WRONG_TURN/i.test(line)) {
+      const msg = buildWrongTurnToast(line);
+      showToast(msg, "err");
+      setMessage(msg, true);
+    } else if (/START_FAILED:MISSING_PIECES:/i.test(line)) {
       const detail = line.split("START_FAILED:MISSING_PIECES:")[1] || "";
       const msg = `Missing piece UID at: ${detail}. Place piece(s) correctly then START again.`;
       showToast(msg, "err");
@@ -400,84 +471,84 @@ function ensureAudioContext() {
   return audioCtx;
 }
 
-function playFenChangeSound() {
-  const ctx = ensureAudioContext();
-  if (!ctx) return;
+function createAudioFx(src, { volume = 1.0, loop = false } = {}) {
+  const audio = new Audio(src);
+  audio.preload = "auto";
+  audio.volume = volume;
+  audio.loop = loop;
+  return audio;
+}
 
-  const play = () => {
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
+function ensureAudioEffectsReady() {
+  ensureAudioContext();
+  if (!fenSoundFx) {
+    fenSoundFx = createAudioFx(FEN_SOUND_SRC, { volume: 1.0, loop: false });
+  }
+  if (!wrongTurnSoundFx) {
+    wrongTurnSoundFx = createAudioFx(WRONG_TURN_SOUND_SRC, { volume: 1.0, loop: true });
+  }
+}
 
-    osc.type = "triangle";
-    osc.frequency.setValueAtTime(700, now);
-    osc.frequency.exponentialRampToValueAtTime(520, now + 0.12);
+function primeAudioEffects() {
+  ensureAudioEffectsReady();
 
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.045, now + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.15);
+  const tryPrime = (audio) => {
+    if (!audio) return;
+    const p = audio.play();
+    if (p && typeof p.then === "function") {
+      p.then(() => {
+        audio.pause();
+        audio.currentTime = 0;
+      }).catch(() => {
+      });
+    }
   };
 
-  if (ctx.state === "suspended") {
-    ctx.resume().then(play).catch(() => {
-    });
-    return;
+  tryPrime(fenSoundFx);
+  tryPrime(wrongTurnSoundFx);
+}
+
+function playAudioFx(audio, { restart = true } = {}) {
+  if (!audio) return;
+  if (restart) {
+    try {
+      audio.currentTime = 0;
+    } catch (e) {
+    }
   }
 
-  if (ctx.state === "running") {
-    play();
+  const p = audio.play();
+  if (p && typeof p.catch === "function") {
+    p.catch(() => {
+    });
   }
+}
+
+function playFenChangeSound() {
+  ensureAudioEffectsReady();
+  playAudioFx(fenSoundFx, { restart: true });
 }
 
 function playWrongTurnAlarmPulse() {
-  const ctx = ensureAudioContext();
-  if (!ctx) return;
-
-  const play = () => {
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = "sawtooth";
-    osc.frequency.setValueAtTime(980, now);
-    osc.frequency.exponentialRampToValueAtTime(720, now + 0.24);
-
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.06, now + 0.012);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.26);
-  };
-
-  if (ctx.state === "suspended") {
-    ctx.resume().then(play).catch(() => {
-    });
-    return;
-  }
-
-  if (ctx.state === "running") {
-    play();
-  }
+  ensureAudioEffectsReady();
+  if (!wrongTurnAlarmActive) return;
+  playAudioFx(wrongTurnSoundFx, { restart: true });
 }
 
 function startWrongTurnAlarm() {
-  if (wrongTurnAlarmTimer !== null) return;
+  if (wrongTurnAlarmActive) return;
+  wrongTurnAlarmActive = true;
   playWrongTurnAlarmPulse();
-  wrongTurnAlarmTimer = window.setInterval(playWrongTurnAlarmPulse, 650);
 }
 
 function stopWrongTurnAlarm() {
-  if (wrongTurnAlarmTimer === null) return;
-  window.clearInterval(wrongTurnAlarmTimer);
-  wrongTurnAlarmTimer = null;
+  wrongTurnAlarmActive = false;
+  if (!wrongTurnSoundFx) return;
+  wrongTurnSoundFx.pause();
+  try {
+    wrongTurnSoundFx.currentTime = 0;
+  } catch (e) {
+  }
 }
 
 function onBoardWheel(e) {
@@ -1792,7 +1863,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  ensureAudioContext();
+  primeAudioEffects();
 
   if (e.key === "ArrowLeft") goPrev();
   if (e.key === "ArrowRight") goNext();
@@ -1803,7 +1874,7 @@ if (els.boardArea) {
   els.boardArea.addEventListener("wheel", onBoardWheel, { passive: false });
 }
 
-window.addEventListener("pointerdown", ensureAudioContext, { once: true });
+window.addEventListener("pointerdown", primeAudioEffects, { once: true });
 
 renderLabels();
 renderBoardFromFen(DEFAULT_START_FEN, { silent: true });
