@@ -2578,7 +2578,10 @@ void smartChessTick() {
   updateLedStatus();
 
   processLichessUploadTick();
+  esp_task_wdt_delete(NULL);
   webPublishPoll();
+  esp_task_wdt_add(NULL);
+  esp_task_wdt_reset();
 
   // Sync fast/normal heartbeat interval with game state
   boardRegSetFastPoll(!gameStarted);
@@ -2599,10 +2602,15 @@ void smartChessTick() {
     }
   }
 
+  // HTTPS calls (WiFiClientSecure TLS handshake) can block >10 s on Render
+  // cold-starts — temporarily remove this task from the watchdog so it
+  // doesn't fire during the network call.
+  esp_task_wdt_delete(NULL);
   boardRegTick();
+  esp_task_wdt_add(NULL);
+  esp_task_wdt_reset();
 
   if (!gameStarted) {
-    esp_task_wdt_reset();
     delay(1);
     return;
   }
