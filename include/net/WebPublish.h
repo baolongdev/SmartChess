@@ -32,5 +32,14 @@ bool          webPublishIsEnabled();
 const String& webPublishGetServerUrl();
 const String& webPublishGetGameID();
 
+/**
+ * HTTP status code of the most recent POST attempt.
+ * 0   = no POST attempted yet (or move just queued, gLastStatus reset).
+ * 2xx = server accepted.
+ * 4xx = server rejected (illegal move, etc.) — caller should rollback seq.
+ * <0  = network-level error (no HTTP response received).
+ */
+int webPublishGetLastStatus();
+
 /** Human-readable status payload for WEB command response. */
 String webPublishStatusPayload(const char *prefix);

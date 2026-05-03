@@ -90,6 +90,25 @@ static uint32_t cycleScanMaxUs = 0;
 
 static unsigned long gameStartTimeMs = 0;
 static int totalMovesCount = 0;
+// Set to true after a move is queued for HTTP delivery; cleared once the server
+// confirms (2xx) or rejects (4xx).  On 4xx, totalMovesCount is decremented to
+// keep the seq counter in sync with the server.
+static bool webMovePendingConfirm = false;
+
+// Snapshot of the game state saved just before applyMove() is called.
+// Used to undo the local board model when the server rejects the move (4xx).
+// savedRollbackFrom == -1 means no snapshot is held.
+static int    savedRollbackFrom    = -1;
+static int    savedRollbackTo      = -1;
+static char   savedRollbackPiece   = '.';   // piece type that was at fromIdx
+static char   savedRollbackTarget  = '.';   // piece type that was at toIdx (captured)
+static String savedRollbackUID     = "";    // UID of the moved piece
+static String savedRollbackTgtUID  = "";    // UID of the captured piece (or "")
+static bool   savedRollbackWTurn   = true;
+static int    savedRollbackHalf    = 0;
+static int    savedRollbackFull    = 1;
+static int    savedRollbackEPFile  = -1;
+static int    savedRollbackEPRank  = -1;
 
 static String cmdBuffer = "";
 static unsigned long cmdLastByteMs = 0;
@@ -1291,6 +1310,8 @@ static bool startAndLearnInitial32() {
   startFailDetail = "";
   gameStartTimeMs = millis();
   totalMovesCount = 0;
+  webMovePendingConfirm = false;
+  savedRollbackFrom     = -1;
 
   Serial.println(F("[START] Du 32 quan. Bat dau tracking."));
   bleLog(String("[READY] STARTED | pieces=32"));
@@ -1819,6 +1840,24 @@ static void handleVerify() {
       return;
     }
 
+    // Snapshot board state BEFORE applyMove so we can undo it if the server
+    // rejects the move as illegal (HTTP 4xx → SERVER_ILLEGAL flow).
+    {
+      int ff = liftedFromIdx / 8, fr = liftedFromIdx % 8;
+      int tf = liftedToIdx   / 8, tr = liftedToIdx   % 8;
+      savedRollbackFrom   = liftedFromIdx;
+      savedRollbackTo     = liftedToIdx;
+      savedRollbackUID    = liftedUID;
+      savedRollbackPiece  = board[ff][fr];
+      savedRollbackTarget = board[tf][tr];
+      savedRollbackTgtUID = squareUID[liftedToIdx];
+      savedRollbackWTurn  = whiteTurn;
+      savedRollbackHalf   = halfmoveClock;
+      savedRollbackFull   = fullmoveNumber;
+      savedRollbackEPFile = enPassantFile;
+      savedRollbackEPRank = enPassantRank;
+    }
+
     if (applyMove(liftedFromIdx, liftedToIdx, liftedUID)) {
       totalMovesCount++;
 
@@ -1829,6 +1868,7 @@ static void handleVerify() {
         uci += 'q';  // auto-promote to queen
       }
       webPublishMove(uci, totalMovesCount);
+      webMovePendingConfirm = true;   // cleared by main-loop check after poll
 
       resetTrackingState();
       bleLog(String(F("[OK] MOVE_CONFIRMED uci=")) + uci);
@@ -1980,6 +2020,8 @@ static void handleWaitRestore() {
     squareUID[liftedFromIdx] = liftedUID;
     rebuildOccupiedListFromBoard();
     resetTrackingState();  // → SCAN_IDLE
+    // Notify server/web that the piece is back and the game has resumed.
+    boardRegQueueAlert("RESTORE_OK", String("at=") + squareNameFromIdx(liftedFromIdx));
     return;
   }
 
@@ -2662,6 +2704,52 @@ void smartChessTick() {
   webPublishPoll();
   esp_task_wdt_add(NULL);
   esp_task_wdt_reset();
+
+  // After each poll, check whether the server rejected our last move.
+  // A 4xx response means chess.js considered the move illegal (e.g. it left the
+  // king in check).  We must:
+  //   1. Roll back totalMovesCount (seq desync prevention)
+  //   2. Restore the local board model to its pre-move state (whiteTurn, board
+  //      squares, UIDs, clocks) so subsequent moves are validated correctly.
+  if (webMovePendingConfirm) {
+    int httpStatus = webPublishGetLastStatus();
+    if (httpStatus >= 400 && httpStatus < 500) {
+      // ── seq rollback ────────────────────────────────────────────────────────
+      if (totalMovesCount > 0) totalMovesCount--;
+      webMovePendingConfirm = false;
+
+      // ── board model undo ────────────────────────────────────────────────────
+      // Restore key state saved just before applyMove() was called.
+      // This covers the most common SERVER_ILLEGAL scenario (piece pinned / move
+      // exposes king to check).  Edge cases: en-passant capture undo and
+      // un-marking a captured piece in pieceDB are skipped for simplicity.
+      if (savedRollbackFrom >= 0) {
+        int ff = savedRollbackFrom / 8, fr = savedRollbackFrom % 8;
+        int tf = savedRollbackTo   / 8, tr = savedRollbackTo   % 8;
+        board[ff][fr]               = savedRollbackPiece;
+        board[tf][tr]               = savedRollbackTarget;
+        squareUID[savedRollbackFrom] = savedRollbackUID;
+        squareUID[savedRollbackTo]   = savedRollbackTgtUID;
+        whiteTurn      = savedRollbackWTurn;
+        halfmoveClock  = savedRollbackHalf;
+        fullmoveNumber = savedRollbackFull;
+        enPassantFile  = savedRollbackEPFile;
+        enPassantRank  = savedRollbackEPRank;
+        rebuildOccupiedListFromBoard();
+        savedRollbackFrom = -1;
+        Serial.println(F("[ROLLBACK] Board model restored after server rejection"));
+      }
+
+      pulseLedError();
+      bleLog(F("[ERR] SERVER_ILLEGAL | illegal move rejected by server — place piece back"));
+      boardRegQueueAlert("SERVER_ILLEGAL", "move rejected");
+    } else if (httpStatus >= 200 && httpStatus < 300) {
+      // Server accepted — clear snapshot
+      savedRollbackFrom = -1;
+      webMovePendingConfirm = false;
+    }
+    // httpStatus == 0: POST not yet completed — check again next loop iteration
+  }
 
   // Sync fast/normal heartbeat interval with game state
   boardRegSetFastPoll(!gameStarted);

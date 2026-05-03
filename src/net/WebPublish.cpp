@@ -143,7 +143,12 @@ void webPublishMove(const String &uci, int seq) {
 
     gPendingUci = uci;
     gPendingSeq = seq;
+    gLastStatus = 0;   // reset so caller can detect when the response arrives
     gState      = WEB_QUEUED;
+}
+
+int webPublishGetLastStatus() {
+    return gLastStatus;
 }
 
 void webPublishPoll() {
