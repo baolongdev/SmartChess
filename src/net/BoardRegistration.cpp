@@ -60,19 +60,37 @@ static void doScanResult() {
     body += gScanDetail;
     body += "\"}";
 
-    // Clear before sending so a failure doesn't cause an infinite retry loop
+    // Save in case we need to re-queue on network error
+    String savedResult = gScanResult;
+    String savedDetail = gScanDetail;
+
+    // Clear now — restored below only on network failure
     gScanResult = "";
     gScanDetail = "";
 
     WiFiClientSecure wc;
     wc.setInsecure();  // skip cert validation — OK for internal board→server traffic
     HTTPClient http;
-    if (!http.begin(wc, url)) return;
+    if (!http.begin(wc, url)) {
+        // Can't even start — re-queue for next tick
+        gScanResult = savedResult;
+        gScanDetail = savedDetail;
+        Serial.println(F("[REG] scan-result http.begin failed, will retry"));
+        return;
+    }
     http.addHeader("Content-Type", "application/json");
-    http.setTimeout(5000);
+    http.setTimeout(8000);
     int code = http.POST(body);
     http.end();
-    Serial.printf("[REG] scan-result %s HTTP %d\n", body.c_str(), code);
+    Serial.printf("[REG] scan-result HTTP %d\n", code);
+
+    if (code < 0) {
+        // Network/TLS error — re-queue so it retries on next boardRegTick()
+        gScanResult = savedResult;
+        gScanDetail = savedDetail;
+        Serial.println(F("[REG] scan-result network error, will retry"));
+    }
+    // 4xx/5xx: server received but rejected — don't retry
 }
 
 // ---------------------------------------------------------------------------
