@@ -2,6 +2,7 @@
 
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 
 namespace {
 
@@ -63,7 +64,8 @@ static void doScanResult() {
     gScanResult = "";
     gScanDetail = "";
 
-    WiFiClient wc;
+    WiFiClientSecure wc;
+    wc.setInsecure();  // skip cert validation — OK for internal board→server traffic
     HTTPClient http;
     if (!http.begin(wc, url)) return;
     http.addHeader("Content-Type", "application/json");
@@ -98,7 +100,8 @@ static void doAlert() {
     gAlertCode   = "";
     gAlertDetail = "";
 
-    WiFiClient wc;
+    WiFiClientSecure wc;
+    wc.setInsecure();
     HTTPClient http;
     if (!http.begin(wc, url)) return;
     http.addHeader("Content-Type", "application/json");
@@ -128,7 +131,8 @@ static bool doHeartbeat() {
     body += ip;
     body += "\"}";
 
-    WiFiClient wc;
+    WiFiClientSecure wc;
+    wc.setInsecure();
     HTTPClient http;
 
     if (!http.begin(wc, url)) {

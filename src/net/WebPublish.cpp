@@ -2,6 +2,7 @@
 
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -54,7 +55,8 @@ static bool doPost(const String &uci, int seq) {
     body += String(seq);
     body += "}";
 
-    WiFiClient client;
+    WiFiClientSecure client;
+    client.setInsecure();  // skip cert validation — OK for internal board→server traffic
     HTTPClient http;
 
     if (!http.begin(client, url)) {
