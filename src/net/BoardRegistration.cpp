@@ -6,6 +6,19 @@
 
 namespace {
 
+// Helper: begin an HTTPClient using the right transport (http vs https).
+// Returns false if http.begin() failed.
+static bool httpBegin(HTTPClient &http, WiFiClient &plain, WiFiClientSecure &secure,
+                      const String &url) {
+    if (url.startsWith("https://")) {
+        secure.setInsecure();
+        return http.begin(secure, url);
+    }
+    return http.begin(plain, url);
+}
+
+
+
 constexpr unsigned long INTERVAL_NORMAL_MS = 30000;  // 30 s — during game
 constexpr unsigned long INTERVAL_FAST_MS   =  5000;  //  5 s — waiting for game start
 
@@ -68,10 +81,10 @@ static void doScanResult() {
     gScanResult = "";
     gScanDetail = "";
 
-    WiFiClientSecure wc;
-    wc.setInsecure();  // skip cert validation — OK for internal board→server traffic
+    WiFiClient plain;
+    WiFiClientSecure secure;
     HTTPClient http;
-    if (!http.begin(wc, url)) {
+    if (!httpBegin(http, plain, secure, url)) {
         // Can't even start — re-queue for next tick
         gScanResult = savedResult;
         gScanDetail = savedDetail;
@@ -118,10 +131,10 @@ static void doAlert() {
     gAlertCode   = "";
     gAlertDetail = "";
 
-    WiFiClientSecure wc;
-    wc.setInsecure();
+    WiFiClient plain;
+    WiFiClientSecure secure;
     HTTPClient http;
-    if (!http.begin(wc, url)) return;
+    if (!httpBegin(http, plain, secure, url)) return;
     http.addHeader("Content-Type", "application/json");
     http.setTimeout(3000);
     int code = http.POST(body);
@@ -149,11 +162,11 @@ static bool doHeartbeat() {
     body += ip;
     body += "\"}";
 
-    WiFiClientSecure wc;
-    wc.setInsecure();
+    WiFiClient plain;
+    WiFiClientSecure secure;
     HTTPClient http;
 
-    if (!http.begin(wc, url)) {
+    if (!httpBegin(http, plain, secure, url)) {
         Serial.println(F("[REG] http.begin failed"));
         return false;
     }

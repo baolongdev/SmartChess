@@ -5,10 +5,21 @@
 #include <WiFiClientSecure.h>
 
 // ---------------------------------------------------------------------------
-// Internal state
+// Internal state + helpers
 // ---------------------------------------------------------------------------
 
 namespace {
+
+// Begin HTTPClient with correct transport based on URL scheme (http vs https).
+static bool httpBegin(HTTPClient &http, WiFiClient &plain, WiFiClientSecure &secure,
+                      const String &url) {
+    if (url.startsWith("https://")) {
+        secure.setInsecure();
+        return http.begin(secure, url);
+    }
+    return http.begin(plain, url);
+}
+
 
 enum WebPublishState {
     WEB_IDLE = 0,
@@ -55,11 +66,11 @@ static bool doPost(const String &uci, int seq) {
     body += String(seq);
     body += "}";
 
-    WiFiClientSecure client;
-    client.setInsecure();  // skip cert validation — OK for internal board→server traffic
+    WiFiClient plain;
+    WiFiClientSecure secure;
     HTTPClient http;
 
-    if (!http.begin(client, url)) {
+    if (!httpBegin(http, plain, secure, url)) {
         gLastError = "HTTP_BEGIN_FAILED";
         return false;
     }
