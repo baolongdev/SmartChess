@@ -52,19 +52,24 @@ void initStandardBoard(char board[8][8]) {
 }
 
 void printBoard(const char board[8][8]) {
-  Serial.println(F("\n  +---+---+---+---+---+---+---+---+"));
+  // Buffer the entire board into one String then print atomically.
+  // Multiple Serial.print() calls interleave with BLE callbacks (different
+  // FreeRTOS task) and corrupt the output.
+  String out;
+  out.reserve(420);
+  out += "\n  +---+---+---+---+---+---+---+---+\n";
   for (int rank = 7; rank >= 0; rank--) {
-    Serial.print(rank + 1);
-    Serial.print(F(" |"));
+    out += (char)('1' + rank);
+    out += " |";
     for (int file = 0; file < 8; file++) {
       char p = board[file][rank];
-      Serial.print(' ');
-      Serial.print(p == '.' ? ' ' : p);
-      Serial.print(F(" |"));
+      out += ' ';
+      out += (p == '.' ? ' ' : p);
+      out += " |";
     }
-    Serial.println();
-    Serial.println(F("  +---+---+---+---+---+---+---+---+"));
+    out += "\n  +---+---+---+---+---+---+---+---+\n";
   }
-  Serial.println(F("    a   b   c   d   e   f   g   h"));
+  out += "    a   b   c   d   e   f   g   h\n";
+  Serial.print(out);
 }
 
