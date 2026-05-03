@@ -27,6 +27,10 @@ constexpr unsigned long TRACKING_TIMEOUT_MS      = 3000;
 constexpr unsigned long FALLBACK_TIMEOUT_MS      = 5000;
 constexpr unsigned long FALLBACK_RETRY_DELAY_MS  = 150;
 constexpr unsigned long IDLE_SLEEP_MS            = 2;
+// SCAN_WAIT_RESTORE: how often to scan for the missing piece returning
+constexpr unsigned long WAIT_RESTORE_SCAN_MS     = 400;
+// SCAN_WAIT_RESTORE: how often to reprint the expected board (reminder)
+constexpr unsigned long WAIT_RESTORE_PRINT_MS    = 8000;
 constexpr int           VERIFY_ROUNDS            = 2;
 
 // GPIO pin pairs for antenna multiplexing (6 odd + 6 even = 64 combinations)

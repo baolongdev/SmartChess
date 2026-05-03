@@ -66,6 +66,10 @@ static String pendingLiftUID = "";
 static int pendingLiftIdx = -1;
 static unsigned long pendingLiftFirstMs = 0;
 
+// SCAN_WAIT_RESTORE timers
+static unsigned long waitRestoreNextScanMs  = 0;
+static unsigned long waitRestoreNextPrintMs = 0;
+
 static bool scanVerbose = false;
 static bool scanContinuous = true;
 static bool scanUsePieceLetters = true;
@@ -1850,7 +1854,9 @@ static void handleFallback() {
     }
 
     if (!foundAnywhere) {
-      // Piece is physically gone — removed from board or RFID tag failed
+      // Piece is physically gone — removed from board or RFID tag failed.
+      // Do NOT corrupt the board model. Instead enter SCAN_WAIT_RESTORE so the
+      // player can put the piece back and the game resumes automatically.
       Serial.print(F("[FALLBACK] PIECE_LOST uid="));
       Serial.print(liftedUID);
       Serial.print(F(" from "));
@@ -1858,13 +1864,16 @@ static void handleFallback() {
       String alertDetail = String("from=") + squareNameFromIdx(liftedFromIdx)
                          + String(" uid=") + liftedUID;
       bleLog(String(F("[ERR] PIECE_LOST ")) + alertDetail
-             + F(" | piece removed or RFID tag fault — place piece back then type START"));
+             + F(" | place piece back on board — game will resume automatically"));
       boardRegQueueAlert("PIECE_LOST", alertDetail);
       pulseLedError();
-      // Mark square as empty in board model so game can continue if piece returns
-      squareUID[liftedFromIdx] = "";
-      board[liftedFromIdx / 8][liftedFromIdx % 8] = '.';
-      rebuildOccupiedListFromBoard();
+      // Enter restore mode — do NOT call abortTrackingRestoreSource() here.
+      scanState = SCAN_WAIT_RESTORE;
+      waitRestoreNextScanMs  = 0;
+      waitRestoreNextPrintMs = 0;
+      Serial.println(F("[RESTORE] Waiting for piece to be placed back..."));
+      printBoard(board);
+      return;
     } else {
       Serial.println(F("[FALLBACK] timeout, piece found — aborting track"));
       String alertDetail = String("from=") + squareNameFromIdx(liftedFromIdx);
@@ -1923,6 +1932,73 @@ static void handleFallback() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// SCAN_WAIT_RESTORE
+// Board model is intact. A piece is missing from the physical board.
+// We wait — without time limit — for:
+//   a) The piece to return to liftedFromIdx (game state unchanged, no move applied)
+//   b) The piece to land on a legal candidate square (move confirmed → SCAN_VERIFY)
+// The board position is reprinted every WAIT_RESTORE_PRINT_MS as a reminder.
+// ---------------------------------------------------------------------------
+static void handleWaitRestore() {
+  unsigned long now = millis();
+
+  // Periodically reprint the expected board so the player knows what to restore
+  if (now >= waitRestoreNextPrintMs) {
+    waitRestoreNextPrintMs = now + WAIT_RESTORE_PRINT_MS;
+    Serial.println(F("[RESTORE] Expected board — restore missing piece:"));
+    printBoard(board);
+    if (liftedFromIdx >= 0) {
+      Serial.print(F("[RESTORE] Missing: "));
+      Serial.print(squareNameFromIdx(liftedFromIdx));
+      Serial.print(F(" ("));
+      Serial.print(liftedPiece);
+      Serial.println(F(") — place it back"));
+    }
+  }
+
+  if (now < waitRestoreNextScanMs) return;
+  waitRestoreNextScanMs = now + WAIT_RESTORE_SCAN_MS;
+
+  if (liftedFromIdx < 0 || liftedUID.length() == 0) {
+    // Shouldn't happen — if we somehow ended up here without a tracked piece,
+    // just reset cleanly so the game can continue.
+    resetTrackingState();  // sets scanState = SCAN_IDLE
+    return;
+  }
+
+  // Case A: piece returned to its original square — no move made, game continues
+  String srcNow = timedScanSquare(liftedFromIdx);
+  if (srcNow == liftedUID) {
+    Serial.print(F("[RESTORE] Piece returned to "));
+    Serial.println(squareNameFromIdx(liftedFromIdx));
+    bleLog(String(F("[RESTORE] OK piece back at ")) + squareNameFromIdx(liftedFromIdx)
+           + F(" | game continues"));
+    pulseLedOk();
+    // Restore UID tracking (squareUID[liftedFromIdx] may have been cleared in
+    // some code paths before PIECE_LOST; ensure it is set correctly).
+    squareUID[liftedFromIdx] = liftedUID;
+    rebuildOccupiedListFromBoard();
+    resetTrackingState();  // → SCAN_IDLE
+    return;
+  }
+
+  // Case B: piece landed on a legal candidate (player chose to make the move)
+  if (candidateCount > 0) {
+    int foundIdx = -1;
+    if (findLiftedUidInList(candidateList, candidateCount, liftedFromIdx, foundIdx)) {
+      Serial.print(F("[RESTORE] Piece at candidate "));
+      Serial.println(squareNameFromIdx(foundIdx));
+      bleLog(String(F("[RESTORE] Piece at ")) + squareNameFromIdx(foundIdx)
+             + F(" | verifying move"));
+      pulseLedInfo();
+      liftedToIdx  = foundIdx;
+      verifyCount  = 0;
+      scanState    = SCAN_VERIFY;
+    }
+  }
+}
+
 static void runScanStateMachine() {
   switch (scanState) {
     case SCAN_IDLE:
@@ -1942,6 +2018,9 @@ static void runScanStateMachine() {
       break;
     case SCAN_FALLBACK:
       handleFallback();
+      break;
+    case SCAN_WAIT_RESTORE:
+      handleWaitRestore();
       break;
   }
 }
@@ -2107,6 +2186,7 @@ static const char* scanStateName() {
     case SCAN_TRACKING_DESTINATION: return "TRACKING";
     case SCAN_VERIFY:               return "VERIFY";
     case SCAN_FALLBACK:             return "FALLBACK";
+    case SCAN_WAIT_RESTORE:         return "WAIT_RESTORE";
     default:                        return "?";
   }
 }

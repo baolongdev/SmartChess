@@ -15,6 +15,11 @@ enum ScanState {
   SCAN_TRACKING_DESTINATION,
   SCAN_VERIFY,
   SCAN_FALLBACK,
+  // Board model intact but physical board has a discrepancy (PIECE_LOST).
+  // Waits indefinitely for the player to restore the missing piece.
+  // Once the expected square has its UID back (or piece lands on a legal
+  // candidate), tracking resumes or the move is confirmed automatically.
+  SCAN_WAIT_RESTORE,
 };
 
 /** Classification of a completed chess move. */
