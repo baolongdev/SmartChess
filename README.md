@@ -69,7 +69,7 @@ SmartChess is an embedded system that turns a standard physical chess board into
 | ODD | 6, 15, 17, 8, 10, 12 |
 | EVEN | 7, 16, 18, 9, 11, 13 |
 
-The full 64-square mapping is defined in `include/SmartChessConfig.h` as `ANTENNA_ARRAY`.
+The full 64-square mapping is defined in `include/core/SmartChessConfig.h` as `ANTENNA_ARRAY`.
 
 ---
 
@@ -78,30 +78,37 @@ The full 64-square mapping is defined in `include/SmartChessConfig.h` as `ANTENN
 ```
 SmartChess/
 ├── src/
-│   ├── main.cpp              # Entry point: setup() / loop()
-│   ├── SmartChessApp.cpp     # Game state machine, move tracking, command handler
-│   ├── RfidScanner.cpp       # Antenna multiplexing and UID scanning
-│   ├── MoveGen.cpp           # Legal candidate move generation per piece type
-│   ├── Fen.cpp               # 6-field FEN string construction
-│   ├── BoardState.cpp        # Board indexing and piece placement utilities
-│   ├── BleFen.cpp            # BLE GATT server, characteristics, callbacks
-│   └── ScanDebug.cpp         # Board dump and scan timing diagnostics
+│   ├── main.cpp
+│   ├── app/
+│   │   └── SmartChessApp.cpp     # Game state machine, command handling
+│   ├── chess/
+│   │   ├── BoardState.cpp        # Board indexing and placement utilities
+│   │   ├── MoveGen.cpp           # Candidate move generation
+│   │   └── Fen.cpp               # 6-field FEN construction
+│   ├── hardware/
+│   │   └── RfidScanner.cpp       # RFID multiplexer and UID scan
+│   ├── ble/
+│   │   └── BleFen.cpp            # BLE GATT service
+│   ├── net/
+│   │   ├── LichessPublish.cpp
+│   │   ├── BoardRegistration.cpp
+│   │   └── WebMovePublish.cpp
+│   └── utils/
+│       ├── ScanDebug.cpp
+│       └── TextUtils.cpp
 ├── include/
-│   ├── SmartChessConfig.h    # Pin definitions, antenna array, timing constants
-│   ├── SmartChessTypes.h     # Enums (ScanState, MoveKind, PieceType), structs
-│   ├── SmartChessApp.h       # Public API: smartChessBegin() / smartChessTick()
-│   ├── RfidScanner.h
-│   ├── BleFen.h
-│   ├── Fen.h
-│   ├── MoveGen.h
-│   └── BoardState.h
+│   ├── SmartChessConfig.h
+│   ├── SmartChessTypes.h
+│   ├── app/
+│   ├── chess/
+│   ├── hardware/
+│   ├── ble/
+│   ├── net/
+│   └── utils/
 ├── web-client/
-│   ├── index.html            # Board UI, controls, FEN display, log panel
-│   ├── app.js                # Web Bluetooth API, move rendering, ACK handling
-│   └── styles.css            # Terminal-style dark theme
-├── docs/                     # Detailed technical documentation
-├── ble_fen_client.py         # Python BLE client (asyncio + bleak)
-├── platformio.ini            # Build / upload / monitor configuration
+├── docs/
+├── ble_fen_client.py
+├── platformio.ini
 └── README.md
 ```
 
@@ -356,3 +363,5 @@ Detailed technical documentation is in the `docs/` directory:
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
+
+

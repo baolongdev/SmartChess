@@ -32,7 +32,7 @@ The 64 antenna coils are multiplexed via 12 GPIO pins: six for odd-indexed squar
 | ODD | 6, 15, 17, 8, 10, 12 |
 | EVEN | 7, 16, 18, 9, 11, 13 |
 
-The full 64-entry mapping (square → GPIO bitmask pair) is defined in `include/SmartChessConfig.h` as `ANTENNA_ARRAY`. Each entry encodes which combination of odd/even pins selects that particular coil.
+The full 64-entry mapping (square → GPIO bitmask pair) is defined in `include/core/SmartChessConfig.h` as `ANTENNA_ARRAY`. Each entry encodes which combination of odd/even pins selects that particular coil.
 
 ## PlatformIO Configuration
 
@@ -59,27 +59,34 @@ lib_deps =
 ```
 SmartChess/
 ├── src/
-│   ├── main.cpp              # setup() / loop() entry point
-│   ├── SmartChessApp.cpp     # Game state machine, move tracking, command handling
-│   ├── RfidScanner.cpp       # Antenna multiplexing and RFID UID reading
-│   ├── MoveGen.cpp           # Candidate move generation per piece type
-│   ├── Fen.cpp               # 6-field FEN string construction
-│   ├── BoardState.cpp        # Board indexing and piece placement utilities
-│   ├── BleFen.cpp            # BLE GATT server and characteristic callbacks
-│   └── ScanDebug.cpp         # Board dump and scan timing diagnostics
+│   ├── main.cpp
+│   ├── app/
+│   │   └── SmartChessApp.cpp
+│   ├── chess/
+│   │   ├── BoardState.cpp
+│   │   ├── MoveGen.cpp
+│   │   └── Fen.cpp
+│   ├── hardware/
+│   │   └── RfidScanner.cpp
+│   ├── ble/
+│   │   └── BleFen.cpp
+│   ├── net/
+│   │   ├── LichessPublish.cpp
+│   │   ├── BoardRegistration.cpp
+│   │   └── WebMovePublish.cpp
+│   └── utils/
+│       ├── ScanDebug.cpp
+│       └── TextUtils.cpp
 ├── include/
-│   ├── SmartChessConfig.h    # Pin definitions, ANTENNA_ARRAY, timing constants
-│   ├── SmartChessTypes.h     # Enums (ScanState, MoveKind, PieceType), structs
-│   ├── SmartChessApp.h       # Public API: smartChessBegin() / smartChessTick()
-│   ├── RfidScanner.h
-│   ├── BleFen.h
-│   ├── Fen.h
-│   ├── MoveGen.h
-│   └── BoardState.h
+│   ├── SmartChessConfig.h
+│   ├── SmartChessTypes.h
+│   ├── app/
+│   ├── chess/
+│   ├── hardware/
+│   ├── ble/
+│   ├── net/
+│   └── utils/
 ├── web-client/
-│   ├── index.html
-│   ├── app.js
-│   └── styles.css
 ├── docs/
 ├── ble_fen_client.py
 ├── platformio.ini
@@ -114,3 +121,5 @@ pio run -t clean
 
 - [Firmware Workflow](03-firmware-workflow.md)
 - [System Overview](01-overview.md)
+
+

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
-#include "SmartChessConfig.h"
+#include "hardware/BoardConfig.h"
 
 void printScanSnapshot(const String inBuf[NUM_ANTENNAS], const __FlashStringHelper *title);
 void printScanCompact(const String inBuf[NUM_ANTENNAS],
@@ -13,3 +13,4 @@ void printScanTiming(uint16_t scannedCount,
                      uint32_t lastAvgCellUs,
                      uint32_t lastMinCellUs,
                      uint32_t lastMaxCellUs);
+

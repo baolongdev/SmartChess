@@ -1,4 +1,4 @@
-#include "LichessPublish.h"
+#include "net/LichessPublish.h"
 
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -7,9 +7,9 @@
 #include <stdarg.h>
 #include <string.h>
 
-#include "BoardState.h"
-#include "MoveGen.h"
-#include "TextUtils.h"
+#include "chess/BoardState.h"
+#include "chess/MoveGen.h"
+#include "utils/TextUtils.h"
 
 namespace {
 
@@ -537,3 +537,4 @@ void lichessProcessUploadTick(LichessContext &ctx, LichessLogFn logFn) {
     }
   }
 }
+

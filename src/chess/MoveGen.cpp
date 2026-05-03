@@ -1,6 +1,6 @@
-#include "MoveGen.h"
+#include "chess/MoveGen.h"
 
-#include "BoardState.h"
+#include "chess/BoardState.h"
 
 PieceType charToPieceType(char p) {
   char lp = (char)tolower(p);
@@ -219,3 +219,4 @@ void generateCandidateSquares(const char board[8][8],
     }
   }
 }
+

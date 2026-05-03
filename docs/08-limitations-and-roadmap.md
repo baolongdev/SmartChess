@@ -56,7 +56,7 @@ Store the UID-to-piece mapping in Non-Volatile Storage after a successful START.
 Instead of a single debounce window, require N consecutive empty reads before confirming a lift.
 
 - Benefit: Further reduces false-lift events in electrically noisy environments.
-- Effort: Low — change to `DEBOUNCE_LIFT_MS` logic in `SmartChessApp.cpp`.
+- Effort: Low — change to `DEBOUNCE_LIFT_MS` logic in `src/app/SmartChessApp.cpp`.
 
 ---
 
@@ -104,3 +104,4 @@ Detect when two pieces are lifted in quick succession and interpret the pattern 
 - [System Overview](01-overview.md)
 - [Scan State Machine](04-scan-state-machine.md)
 - [Firmware Workflow](03-firmware-workflow.md)
+

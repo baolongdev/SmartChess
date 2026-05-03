@@ -1,7 +1,7 @@
 #pragma once
 
-#include "SmartChessConfig.h"
-#include "SmartChessTypes.h"
+#include "hardware/BoardConfig.h"
+#include "app/AppTypes.h"
 
 PieceType charToPieceType(char p);
 bool isBlackPiece(char p);
@@ -19,3 +19,4 @@ void generateCandidateSquares(const char board[8][8],
                               bool blackCanCastleQ,
                               int outList[MAX_CANDIDATES],
                               int &outCount);
+

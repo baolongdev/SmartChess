@@ -4,14 +4,14 @@ The RFID scan loop is driven by a six-state machine that advances on every `smar
 
 ## States
 
-| State | Purpose |
-|-------|---------|
-| `SCAN_IDLE` | Monitor occupied squares for any UID disappearance |
-| `SCAN_LIFT_PENDING` | Debounce — confirm the lift is real, not a transient read failure |
-| `SCAN_PIECE_LIFTED` | Enforce turn order and generate candidate destination list |
-| `SCAN_TRACKING_DESTINATION` | Scan candidate squares to find where the piece lands |
-| `SCAN_VERIFY` | Require N stable rounds before committing the move |
-| `SCAN_FALLBACK` | Attempt recovery when the destination was not found in time |
+| State                        | Purpose                                                           |
+|------------------------------|-------------------------------------------------------------------|
+| `SCAN_IDLE`                  | Monitor occupied squares for any UID disappearance                |
+| `SCAN_LIFT_PENDING`          | Debounce — confirm the lift is real, not a transient read failure |
+| `SCAN_PIECE_LIFTED`          | Enforce turn order and generate candidate destination list        |
+| `SCAN_TRACKING_DESTINATION`  | Scan candidate squares to find where the piece lands              |
+| `SCAN_VERIFY`                | Require N stable rounds before committing the move                |
+| `SCAN_FALLBACK`              | Attempt recovery when the destination was not found in time       |
 
 ---
 
@@ -91,7 +91,7 @@ The RFID scan loop is driven by a six-state machine that advances on every `smar
 1. Re-check the source square one final time to rule out late-returning glitches.
 2. **Turn enforcement:** Compare the lifted piece's color against `whiteTurn`.
    - If wrong turn → log `ERR WRONG_TURN` and transition to `SCAN_FALLBACK`.
-3. If correct turn → remove the UID from `occupiedList`, call `MoveGen::generateCandidateSquares()`.
+3. If correct turn -> remove the UID from `occupiedList`, call `generateCandidateSquares()` from `chess/MoveGen`.
 
 **Log output:**
 ```
@@ -156,13 +156,13 @@ The RFID scan loop is driven by a six-state machine that advances on every `smar
 
 ## Timing Constants
 
-| Constant | Default | Defined in |
-|----------|---------|-----------|
-| `DEBOUNCE_LIFT_MS` | 50 ms | `SmartChessConfig.h` |
-| `TRACKING_TIMEOUT_MS` | 3 000 ms | `SmartChessConfig.h` |
-| `FALLBACK_TIMEOUT_MS` | 5 000 ms | `SmartChessConfig.h` |
-| `FALLBACK_RETRY_DELAY` | 150 ms | `SmartChessConfig.h` |
-| `VERIFY_ROUNDS` | 2 | `SmartChessConfig.h` |
+| Constant                   | Default    | Defined in                            |
+|----------------------------|------------|---------------------------------------|
+| `DEBOUNCE_LIFT_MS`         | 50 ms      | `include/core/SmartChessConfig.h`     |
+| `TRACKING_TIMEOUT_MS`      | 3 000 ms   | `include/core/SmartChessConfig.h`     |
+| `FALLBACK_TIMEOUT_MS`      | 5 000 ms   | `include/core/SmartChessConfig.h`     |
+| `FALLBACK_RETRY_DELAY_MS`  | 150 ms     | `include/core/SmartChessConfig.h`     |
+| `VERIFY_ROUNDS`            | 2          | `include/core/SmartChessConfig.h`     |
 
 ---
 

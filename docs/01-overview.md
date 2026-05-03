@@ -38,11 +38,11 @@ SmartChess is an embedded system that adds real-time move tracking and wireless 
 │   └──────────────┘          └────────────┘                 │
 │                                                             │
 │   ┌─────────────────────────────────────────────────────┐  │
-│   │  SmartChessApp (state machine + game logic)         │  │
-│   │   ├─ RfidScanner   (antenna control + UID reads)    │  │
-│   │   ├─ MoveGen       (candidate square generation)    │  │
-│   │   ├─ Fen           (FEN string construction)        │  │
-│   │   └─ BleFen        (BLE GATT server)                │  │
+│   │  app/SmartChessApp  (state machine + game logic)    │  │
+│   │   ├─ hardware/RfidScanner (antenna + UID reads)     │  │
+│   │   ├─ chess/MoveGen       (candidate generation)     │  │
+│   │   ├─ chess/Fen           (FEN construction)         │  │
+│   │   └─ ble/BleFen          (BLE GATT server)          │  │
 │   └─────────────────────────────────────────────────────┘  │
 │                          │ BLE                              │
 └──────────────────────────┼──────────────────────────────────┘

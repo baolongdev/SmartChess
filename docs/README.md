@@ -10,5 +10,8 @@
 | 6 | [06-web-client.md](06-web-client.md) | Web Bluetooth client — implementation and UI behavior |
 | 7 | [07-python-client-and-debug.md](07-python-client-and-debug.md) | Python CLI client and debugging guide |
 | 8 | [08-limitations-and-roadmap.md](08-limitations-and-roadmap.md) | Known limitations and future improvements |
+| 9 | [09-web-integration.md](09-web-integration.md) | WiFi heartbeat, scan-result, alert protocol; full WiFi game flow |
+
+Note: firmware code is organized by module under `src/{app,chess,hardware,ble,net,utils}` and `include/{app,chess,hardware,ble,net,utils,core}`.
 
 Back to [project root](../README.md).

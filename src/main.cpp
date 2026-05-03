@@ -1,4 +1,4 @@
-#include "SmartChessApp.h"
+#include "app/SmartChessApp.h"
 
 void setup() {
   smartChessBegin();
@@ -7,3 +7,4 @@ void setup() {
 void loop() {
   smartChessTick();
 }
+

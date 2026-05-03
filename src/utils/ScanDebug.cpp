@@ -1,6 +1,6 @@
-#include "ScanDebug.h"
+#include "utils/ScanDebug.h"
 
-#include "BoardState.h"
+#include "chess/BoardState.h"
 
 static void printMsFromUs(uint32_t us) {
   Serial.print(us / 1000);
@@ -142,3 +142,4 @@ void printScanTiming(uint16_t scannedCount,
   }
   Serial.println();
 }
+

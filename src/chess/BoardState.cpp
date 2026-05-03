@@ -1,4 +1,4 @@
-#include "BoardState.h"
+#include "chess/BoardState.h"
 
 int squareIdx(int file, int rank) {
   return file * 8 + rank;
@@ -67,3 +67,4 @@ void printBoard(const char board[8][8]) {
   }
   Serial.println(F("    a   b   c   d   e   f   g   h"));
 }
+

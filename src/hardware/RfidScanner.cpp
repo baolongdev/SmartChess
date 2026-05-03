@@ -1,4 +1,4 @@
-#include "RfidScanner.h"
+#include "hardware/RfidScanner.h"
 
 #include <SPI.h>
 #include <driver/gpio.h>
@@ -8,7 +8,7 @@ static void setupRC522Timeout(MFRC522 &mfrc522) {
   mfrc522.PCD_WriteRegister(mfrc522.TModeReg, 0x80);
   mfrc522.PCD_WriteRegister(mfrc522.TPrescalerReg, 0xA9);
   mfrc522.PCD_WriteRegister(mfrc522.TReloadRegH, 0x00);
-  mfrc522.PCD_WriteRegister(mfrc522.TReloadRegL, 0xC8);
+  mfrc522.PCD_WriteRegister(mfrc522.TReloadRegL, 0x78);
 }
 
 static void set12Pins(uint8_t value) {
@@ -43,7 +43,7 @@ void initRfidScanner(MFRC522 &mfrc522) {
 
 String scanUID(MFRC522 &mfrc522, int idx) {
   set12Pins(ANTENNA_ARRAY[idx]);
-  delayMicroseconds(200);
+  delayMicroseconds(400);
 
   byte atqa[2];
   byte atqaSize = sizeof(atqa);
@@ -63,6 +63,24 @@ String scanUID(MFRC522 &mfrc522, int idx) {
     return uid;
   }
   return "";
+}
+
+// Fast presence-only check — skips ReadCardSerial, ~6× faster than scanUID.
+// Returns true if any card responds to WUPA. Use during SCAN_IDLE tracking
+// where only lift/land detection is needed (UID already known from initial scan).
+bool scanPresent(MFRC522 &mfrc522, int idx) {
+  set12Pins(ANTENNA_ARRAY[idx]);
+  delayMicroseconds(200);   // shorter settle — presence check is less demanding
+
+  byte atqa[2];
+  byte atqaSize = sizeof(atqa);
+  MFRC522::StatusCode status = mfrc522.PICC_WakeupA(atqa, &atqaSize);
+  bool present = (status == MFRC522::STATUS_OK || status == MFRC522::STATUS_COLLISION);
+  if (present) {
+    mfrc522.PICC_HaltA();
+    mfrc522.PCD_StopCrypto1();
+  }
+  return present;
 }
 
 void selectiveScanToBuffer(MFRC522 &mfrc522,
@@ -126,3 +144,4 @@ void fullScanToBuffer(MFRC522 &mfrc522,
                         lastMinCellUs,
                         lastMaxCellUs);
 }
+
