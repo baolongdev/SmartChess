@@ -15,6 +15,7 @@
 #include "hardware/BoardConfig.h"
 #include "app/AppTypes.h"
 #include "utils/TextUtils.h"
+#include "utils/Logger.h"
 #include "net/WebPublish.h"
 #include "net/BoardRegistration.h"
 
@@ -23,15 +24,19 @@
 #include <ctype.h>
 
 // ---------------------------------------------------------------------------
-// Button — GPIO 0 (BOOT button on most ESP32 dev boards, internal pull-up)
+// Button — GPIO 38 (pull-up, active LOW, state-machine debounce, no ISR)
 // ---------------------------------------------------------------------------
-constexpr int BUTTON_PIN = 0;
-static volatile bool buttonInterruptFlag = false;
-static unsigned long lastButtonMs = 0;
+constexpr int BUTTON_PIN = 38;
+static unsigned long btnLastPressMs = 0;      // millis() of last accepted press
+constexpr unsigned long BTN_COOLDOWN_MS = 35; // min gap between presses
+enum { BTN_IDLE, BTN_DEBOUNCE, BTN_WAIT_RELEASE } btnState = BTN_IDLE;
+static unsigned long btnDebounceUs = 0;         // micros() when debounce started
 
-void IRAM_ATTR onButtonPress() {
-  buttonInterruptFlag = true;
-}
+// ---------------------------------------------------------------------------
+// UART2 — hardware serial for external controller (TX=19, RX=20)
+// ---------------------------------------------------------------------------
+constexpr int UART2_TX = 19;
+constexpr int UART2_RX = 20;
 
 // ---------------------------------------------------------------------------
 // RFID + Board model
@@ -46,12 +51,17 @@ static int pieceDBCount = 0;
 
 static bool whiteTurn = true;
 static int moveSeq = 0;
+static bool gameStarted = false;
+
+// Async START verification — scan happens in loop(), not in heartbeat handler
+static bool pendingStartScan = false;
+static unsigned long startRetryBlockedUntilMs = 0;
 
 // ---------------------------------------------------------------------------
 // Scan settings — persisted in NVS
 // ---------------------------------------------------------------------------
 static bool scanVerbose = false;
-static bool scanContinuous = true;
+static bool scanContinuous = false;
 static bool scanUsePieceLetters = true;
 static unsigned long lastScanPrintMs = 0;
 
@@ -272,7 +282,7 @@ static bool startWifiConnect() {
   wifiLastError = "";
   wifiConnectStartMs = millis();
   pulseLedInfo();
-  bleLog(String("[WIFI] CONNECTING ssid=") + wifiSavedSsid);
+  logI("WIFI", String("CONNECTING ssid=") + wifiSavedSsid);
   return true;
 }
 
@@ -419,7 +429,7 @@ static void loadSettingsFromStore() {
   settingsVersion = settingsStore.getULong(KEY_CFG_VER, 1UL);
   if (settingsVersion == 0) settingsVersion = 1;
   scanVerbose = settingsStore.getBool(KEY_SCAN_V, false);
-  scanContinuous = settingsStore.getBool(KEY_SCAN_C, true);
+  scanContinuous = settingsStore.getBool(KEY_SCAN_C, false);
   scanUsePieceLetters = settingsStore.getBool(KEY_SCAN_L, true);
 }
 
@@ -470,71 +480,262 @@ static void registerPiece(const String &uid, char piece) {
   }
 }
 
+static void scanAllSquares();  // forward decl — defined below
+
+// ── Multi-read majority-LEARN + post-verification ─────────────────────────
+// For each square, reads the UID 3 times and accepts only if ≥2/3 match
+// (filters intermittent crosstalk).  Then checks for duplicate UIDs across
+// squares (persistent crosstalk); duplicates are cleared and retried.
+// After registration, re-scans the entire board and verifies the resulting
+// position matches the standard starting position.  If not, the entire
+// process is retried (up to LEARN_TOTAL_ATTEMPTS).
+// Returns a loggable status string like "LEARNED pieces=32/32".
+// ──────────────────────────────────────────────────────────────────────────
+
+static constexpr int LEARN_READS_PER_SQUARE = 5;   // must get ≥3 same
+static constexpr int LEARN_READS_THRESHOLD  = 3;
+static constexpr int LEARN_MAX_RETRIES      = 5;    // collision-retry passes
+static constexpr int LEARN_TOTAL_ATTEMPTS   = 3;    // full LEARN retries
+static constexpr unsigned long START_RETRY_COOLDOWN_MS = 10000;
+
+// Standard starting position for post-LEARN validation
+static const char LEARN_STD_PIECES[] = "RNBQKBNR";
+static const char LEARN_STD_PAWNS[]  = "PPPPPPPP";
+static const char LEARN_STDb_PIECES[] = "rnbqkbnr";
+static const char LEARN_STDb_PAWNS[]  = "pppppppp";
+
+// Read one square multiple times; return UID that appears ≥ READ_THRESHOLD
+static String majorityRead(int idx, int reads, int threshold) {
+  struct { String uid; int count; } cand[4];
+  int n = 0;
+  for (int a = 0; a < reads; a++) {
+    String uid = scanUID(mfrc522, idx);
+    delayMicroseconds(300);
+    if (uid.length() == 0) continue;
+    int found = -1;
+    for (int c = 0; c < n; c++) { if (cand[c].uid == uid) { found = c; break; } }
+    if (found >= 0) {
+      cand[found].count++;
+    } else if (n < 4) {
+      cand[n].uid = uid; cand[n].count = 1; n++;
+    }
+  }
+  for (int c = 0; c < n; c++) {
+    if (cand[c].count >= threshold) return cand[c].uid;
+  }
+  return "";
+}
+
+static String learnPieces() {
+  char stdBoard[8][8];
+  initStandardBoard(stdBoard);   // saved for validation later
+  pieceDBCount = 0;
+
+  for (int attempt = 0; attempt < LEARN_TOTAL_ATTEMPTS; attempt++) {
+    String detected[NUM_ANTENNAS];
+    bool   resolved[NUM_ANTENNAS] = {false};
+
+    // Phase 1: majority-vote read each square
+    for (int idx = 0; idx < NUM_ANTENNAS; idx++) {
+      String uid = majorityRead(idx, LEARN_READS_PER_SQUARE, LEARN_READS_THRESHOLD);
+      if (uid.length() > 0) { detected[idx] = uid; resolved[idx] = true; }
+    }
+
+    // Phase 2: resolve duplicates (persistent crosstalk) via retry
+    for (int rp = 0; rp < LEARN_MAX_RETRIES; rp++) {
+      bool conflict = false;
+      // find duplicates
+      for (int i = 0; i < NUM_ANTENNAS; i++) {
+        if (!resolved[i] || detected[i].length() == 0) continue;
+        for (int j = i + 1; j < NUM_ANTENNAS; j++) {
+          if (!resolved[j] || detected[j].length() == 0) continue;
+          if (detected[j] == detected[i]) {
+            resolved[i] = false; resolved[j] = false; conflict = true;
+          }
+        }
+      }
+      if (!conflict) break;
+      // re-scan cleared squares with longer settle
+      for (int idx = 0; idx < NUM_ANTENNAS; idx++) {
+        if (resolved[idx]) continue;
+        delayMicroseconds(600);
+        String uid = majorityRead(idx, LEARN_READS_PER_SQUARE, LEARN_READS_THRESHOLD);
+        if (uid.length() == 0) continue;
+        bool claimed = false;
+        for (int k = 0; k < NUM_ANTENNAS; k++) {
+          if (k != idx && resolved[k] && detected[k] == uid) { claimed = true; break; }
+        }
+        if (!claimed) { detected[idx] = uid; resolved[idx] = true; }
+      }
+    }
+
+    // Phase 3: register
+    pieceDBCount = 0;
+    int learned = 0;
+    for (int idx = 0; idx < NUM_ANTENNAS; idx++) {
+      if (resolved[idx] && detected[idx].length() > 0) {
+        int file = idx / 8;
+        int rank = idx % 8;
+        char piece = stdBoard[file][rank];
+        if (piece != '.') { registerPiece(detected[idx], piece); learned++; }
+      }
+    }
+
+    if (learned < 32) {
+      logW("LEARN", String("Incomplete LEARN (attempt ") + (attempt + 1)
+             + "/" + LEARN_TOTAL_ATTEMPTS + "), retrying...");
+      pieceDBCount = 0;
+      continue;
+    }
+
+    // Phase 4: VERIFICATION — validate piece-type counts.
+    // A correct standard-position registration must have exactly:
+    //   White: 1K 1Q 2R 2B 2N 8P
+    //   Black: 1k 1q 2r 2b 2n 8p
+    // If counts don't add up (e.g. queen UID registered as 'P' on a2,
+    // then also as 'Q' on d1 → total queens=2, pawns=7), the LEARN
+    // is corrupt and must be retried.
+    int counts[256] = {0};
+    for (int i = 0; i < pieceDBCount; i++) {
+      counts[(unsigned char)pieceDB[i].piece]++;
+    }
+    auto expectCount = [&](char piece, int expected) -> bool {
+      return counts[(unsigned char)piece] == expected;
+    };
+    bool valid = true;
+    valid = valid && expectCount('K', 1) && expectCount('Q', 1);
+    valid = valid && expectCount('R', 2) && expectCount('B', 2) && expectCount('N', 2);
+    valid = valid && expectCount('P', 8);
+    valid = valid && expectCount('k', 1) && expectCount('q', 1);
+    valid = valid && expectCount('r', 2) && expectCount('b', 2) && expectCount('n', 2);
+    valid = valid && expectCount('p', 8);
+
+    if (valid) {
+      String msg = String("LEARNED pieces=") + learned + "/32";
+      logI("LEARN", msg);
+      return msg;
+    }
+    // Verification failed — retry entire LEARN
+    logW("LEARN", String("Verification FAILED (attempt ") + (attempt + 1)
+           + "/" + LEARN_TOTAL_ATTEMPTS + "), retrying...");
+    pieceDBCount = 0;
+  }
+
+  // All attempts exhausted — register whatever we have
+  pieceDBCount = 0;
+  logE("LEARN", "All attempts exhausted — LEARN failed");
+  return "LEARN FAILED after " + String(LEARN_TOTAL_ATTEMPTS) + " attempts";
+}
+
 // ---------------------------------------------------------------------------
 // FEN builder wrapper
 // ---------------------------------------------------------------------------
 static char fenBuffer[128];
 static const char* buildCurrentFen() {
-  int fullmoveNumber = (moveSeq / 2) + 1;
   fenBuild(board, fenBuffer, sizeof(fenBuffer),
            whiteTurn,
-           -1, -1,   // en passant = none
-           0,         // halfmove clock
-           fullmoveNumber,
+           -1, -1,
+           0,
+           moveSeq + 1,
+           false, false, false, false, false, false);
+  return fenBuffer;
+}
+
+static const char* buildPlyFen(bool turn, int fullmove) {
+  fenBuild(board, fenBuffer, sizeof(fenBuffer),
+           turn,
+           -1, -1,
+           0,
+           fullmove,
            false, false, false, false, false, false);
   return fenBuffer;
 }
 
 // ---------------------------------------------------------------------------
-// scanAllAndPublish — core new function
+// scanAllAndPublish — 1 press = 1 ply (professional tournament standard)
+// - whiteTurn tells us who just moved
+// - FEN shows next player to move, fullmove increments after Black's move
 // ---------------------------------------------------------------------------
-static void scanAllAndPublish() {
-  pulseLedInfo();
-  unsigned long scanStart = millis();
-
-  bleLog(F("[SCAN] Scanning all 64 squares..."));
-
-  // 1. Burst scan all squares
+static void scanAllSquares() {
   for (int idx = 0; idx < NUM_ANTENNAS; idx++) {
     String uid = scanUID(mfrc522, idx);
     int file = idx / 8;
     int rank = idx % 8;
-
     if (uid.length() == 0) {
       board[file][rank] = '.';
       squareUID[idx] = "";
     } else {
       char piece = lookupUID(uid);
-      if (piece == '?') {
-        board[file][rank] = '?';
-      } else {
-        board[file][rank] = piece;
-      }
+      board[file][rank] = (piece == '?') ? '?' : piece;
       squareUID[idx] = uid;
     }
+    if (idx % 8 == 0) esp_task_wdt_reset();
+  }
+}
 
-    if (idx % 8 == 0) {
-      esp_task_wdt_reset();
+static void majorityReadAllSquares() {
+  // Read each square 3 times, accept UID that appears ≥2 (filters intermittent crosstalk).
+  // ~3× slower than single scan but much more robust.
+  struct { String uid; int count; } tally[3];
+  for (int idx = 0; idx < NUM_ANTENNAS; idx++) {
+    int n = 0;
+    for (int r = 0; r < 3; r++) {
+      String uid = scanUID(mfrc522, idx);
+      int found = -1;
+      for (int c = 0; c < n; c++) { if (tally[c].uid == uid) { found = c; break; } }
+      if (found >= 0) {
+        tally[found].count++;
+      } else if (n < 3) {
+        tally[n].uid = uid; tally[n].count = 1; n++;
+      }
     }
+    // pick majority UID (≥2)
+    String bestUid = "";
+    for (int c = 0; c < n; c++) { if (tally[c].count >= 2) { bestUid = tally[c].uid; break; } }
+    int file = idx / 8;
+    int rank = idx % 8;
+    if (bestUid.length() == 0) {
+      board[file][rank] = '.';
+      squareUID[idx] = "";
+    } else {
+      char piece = lookupUID(bestUid);
+      board[file][rank] = (piece == '?') ? '?' : piece;
+      squareUID[idx] = bestUid;
+    }
+    if (idx % 8 == 0) esp_task_wdt_reset();
+  }
+}
+
+static void scanAllAndPublish() {
+  pulseLedInfo();
+  unsigned long scanStart = millis();
+  scanAllSquares();
+
+  if (!gameStarted) {
+    unsigned long elapsed = millis() - scanStart;
+    logI("SCAN", String("Board scanned ") + elapsed + "ms");
+    printBoard(board);
+    logI("SCAN", "Game not started — board display only");
+    pulseLedOk();
+    return;
   }
 
-  // 2. Toggle turn
-  whiteTurn = !whiteTurn;
+  // Fullmove increments after Black's move (standard chess)
+  if (!whiteTurn) moveSeq++;
 
-  // 3. Build FEN
-  const char *fen = buildCurrentFen();
+  bool nextTurn = !whiteTurn;
+  int fullmove = moveSeq + 1;
+  const char *fen = buildPlyFen(nextTurn, fullmove);
 
   unsigned long elapsed = millis() - scanStart;
-  bleLog(String("[SCAN] Done ") + String(elapsed) + "ms | " + String(fen));
-  Serial.print(F("[SCAN] "));
-  Serial.println(fen);
+  const char *player = whiteTurn ? "White" : "Black";
+  logI("SCAN", String(player) + " just moved | "
+       + elapsed + "ms | " + fen);
   printBoard(board);
-
-  // 4. Publish
-  moveSeq++;
-  webPublishFEN(String(fen), moveSeq);
+  webPublishFEN(String(fen), fullmove);
   bleUpdateFEN(String(fen));
 
+  whiteTurn = nextTurn;
   pulseLedOk();
 }
 
@@ -577,7 +778,7 @@ static bool handleCfgSetCommand(const String &cmd, String &response) {
 
   persistSettingsToStore();
   response = buildSettingsPayload("CFG_SAVED");
-  bleLog(String("[CFG] SAVED ") + response);
+  logI("CFG", String("SAVED ") + response);
   return true;
 }
 
@@ -623,7 +824,7 @@ static bool handleWifiSetCommand(const String &cmd, String &response) {
   }
 
   response = buildWifiPayload("WIFI_SAVED");
-  bleLog(String("[WIFI] SAVED ") + response);
+  logI("WIFI", String("SAVED ") + response);
   return true;
 }
 
@@ -658,6 +859,10 @@ static bool handleWebSetCommand(const String &cmd, String &response) {
   return true;
 }
 
+// Forward declarations
+static bool handleCommonCommand(const String &cmd, const String &cmdUpper,
+                                String &response, bool &handled);
+
 // ---------------------------------------------------------------------------
 // BoardRegistration callbacks
 // ---------------------------------------------------------------------------
@@ -665,7 +870,130 @@ static void onBoardRegGameIDAssigned(const String &newGameID) {
   webGameID = newGameID;
   webPublishSetConfig(webServerUrl, webGameID, boardID, webEnabled);
   persistWebSettingsToStore();
-  bleLog(String("[REG] gameID assigned=") + newGameID);
+  logI("REG", String("gameID assigned=") + newGameID);
+}
+
+// ---------------------------------------------------------------------------
+// executeStartScan — scan RFID, validate standard position, start or reject
+// ---------------------------------------------------------------------------
+static void executeStartScan(String &outResponse) {
+  // Auto-learn if no piece UIDs have been learned yet (e.g. after FACTORY_RESET)
+  if (pieceDBCount == 0) {
+    learnPieces();
+    logI("START", "Auto-learn complete");
+  }
+
+  scanAllSquares();
+
+  // Standard starting position:
+  //   Rank 1 (r=0): R N B Q K B N R
+  //   Rank 2 (r=1): P P P P P P P P
+  //   Ranks 3-6:    . . . . . . . .
+  //   Rank 7 (r=6): p p p p p p p p
+  //   Rank 8 (r=7): r n b q k b n r
+  static const char STD_PIECES[] = "RNBQKBNR";
+  static const char STD_PAWNS[]  = "PPPPPPPP";
+  static const char STDb_PIECES[] = "rnbqkbnr";
+  static const char STDb_PAWNS[]  = "pppppppp";
+
+  String wrongSq = "";
+  String missingSq = "";
+  for (int f = 0; f < 8; f++) {
+    for (int r = 0; r < 8; r++) {
+      char expected = '.';
+      if (r == 0)      expected = STD_PIECES[f];
+      else if (r == 1) expected = STD_PAWNS[f];
+      else if (r == 6) expected = STDb_PAWNS[f];
+      else if (r == 7) expected = STDb_PIECES[f];
+
+      char actual = board[f][r];
+      String sq = squareNameFromIdx(squareIdx(f, r));
+
+      if (expected != '.' && (actual == '.' || actual == '?')) {
+        if (missingSq.length() > 0) missingSq += ",";
+        missingSq += sq;
+      } else if (expected == '.' && actual != '.' && actual != '?') {
+        if (wrongSq.length() > 0) wrongSq += ",";
+        wrongSq += sq;
+      } else if (expected != '.' && actual != '.' && actual != '?' && expected != actual) {
+        if (wrongSq.length() > 0) wrongSq += ",";
+        wrongSq += sq;
+      }
+    }
+  }
+
+  if (wrongSq.length() == 0 && missingSq.length() == 0) {
+    if (btnState != BTN_IDLE) {
+      boardRegQueueScanResult("MISSING", "BUTTON_STATE_FAIL");
+      boardRegSetFastPoll(true);
+      boardRegForceHeartbeat();
+      logW("GAME", "START rejected — BUTTON_STATE_FAIL");
+      outResponse = "GAME_ERR:BUTTON_STATE_FAIL";
+      pulseLedError();
+      return;
+    }
+
+    gameStarted = true;
+    whiteTurn = true; // always White to move first at game start
+    moveSeq = 0;
+    btnState = BTN_IDLE;
+    btnLastPressMs = 0;
+    boardRegQueueScanResult("STARTED", "");
+    boardRegSetFastPoll(false);
+    boardRegForceHeartbeat();
+    logI("GAME", String("START — board verified, ") + pieceDBCount + " UIDs mapped. White moves first.");
+    outResponse = "GAME_STARTED";
+    pulseLedOk();
+  } else {
+    String resultType;
+    String detail;
+    if (missingSq.length() > 0) {
+      resultType = "MISSING";
+      detail = missingSq;
+      if (wrongSq.length() > 0) detail += "," + wrongSq;
+    } else {
+      resultType = "DUPLICATE";
+      detail = wrongSq;
+    }
+    boardRegQueueScanResult(resultType, detail);
+    logW("GAME", String("START rejected — ") + resultType + " " + detail);
+    outResponse = "GAME_ERR:" + resultType + ":" + detail;
+    pulseLedError();
+  }
+}
+
+/** Dispatch START/STOP commands received via heartbeat response from server. */
+static void onBoardRegCommand(const String &command) {
+  String cmdUpper = command;
+  cmdUpper.toUpperCase();
+  logI("CMD", String("Server command: ") + command);
+
+  if (cmdUpper == "START") {
+    pendingStartScan = true;
+  } else if (cmdUpper == "STOP") {
+    gameStarted = false;
+    btnState = BTN_IDLE;
+    btnLastPressMs = 0;
+    logI("GAME", "STOP from server");
+  } else {
+    logW("CMD", String("Unhandled server command: ") + command);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FACTORY_RESET — clear all NVS, reset board, restart
+// ---------------------------------------------------------------------------
+static void doFactoryReset() {
+  logW("RESET", "Factory reset — clearing all settings...");
+  WiFi.disconnect(true);
+  if (settingsStoreReady) {
+    settingsStore.clear();
+    settingsStore.end();
+  }
+  delay(100);
+  logW("RESET", "NVS cleared. Restarting...");
+  delay(200);
+  esp_restart();
 }
 
 // ---------------------------------------------------------------------------
@@ -713,6 +1041,27 @@ static bool handleCommonCommand(const String &cmd, const String &cmdUpper,
     response = buildWifiPayload("WIFI_DISCONNECTED"); return true;
   }
 
+  if (cmdUpper == "START") {
+    handled = true;
+    executeStartScan(response);
+    return true;
+  }
+
+  if (cmdUpper == "STOP") {
+    handled = true;
+    gameStarted = false;
+    btnState = BTN_IDLE;
+    btnLastPressMs = 0;
+    logI("GAME", "STOP — game ended.");
+    response = "GAME_STOPPED";
+    pulseLedInfo();
+    return true;
+  }
+
+  if (cmdUpper == "FACTORY_RESET") {
+    handled = true; doFactoryReset(); return true;
+  }
+
   if (cmdUpper == "WEB" || cmdUpper == "WEB?" || cmdUpper == "WEB_GET") {
     handled = true; response = webPublishStatusPayload("WEB"); return true;
   }
@@ -734,6 +1083,7 @@ static bool handleBleCommand(const String &raw, String &response) {
 
   // SNAPSHOT — manual trigger (same as pressing the button)
   if (cmdUpper == "SNAPSHOT") {
+    logI("BTN", "SNAPSHOT command -> scanAllAndPublish()");
     scanAllAndPublish();
     response = "SNAPSHOT_OK";
     return true;
@@ -767,29 +1117,9 @@ static bool handleBleCommand(const String &raw, String &response) {
   }
 
   if (cmdUpper == "LEARN") {
-    // LEARN|a1=P a2=P ...  — used to associate UIDs with piece types
-    // Scan all squares, detect UIDs, register each with its standard piece
-    initStandardBoard(board);
-    pieceDBCount = 0;
-    int learned = 0;
-    for (int idx = 0; idx < NUM_ANTENNAS; idx++) {
-      String uid = scanUID(mfrc522, idx);
-      if (uid.length() > 0) {
-        int file = idx / 8;
-        int rank = idx % 8;
-        char piece = board[file][rank];
-        if (piece != '.') {
-          registerPiece(uid, piece);
-          learned++;
-        }
-      }
-    }
-    // Set turn back to white, reset seq
+    response = learnPieces();
     whiteTurn = true;
     moveSeq = 0;
-    String msg = String("LEARNED pieces=") + learned + "/32";
-    bleLog(msg);
-    response = msg;
     pulseLedOk();
     return true;
   }
@@ -799,7 +1129,7 @@ static bool handleBleCommand(const String &raw, String &response) {
   if (handled) return false;
 
   response = "UNKNOWN_CMD";
-  bleLog(String("[ERR] UNKNOWN_CMD ") + cmdUpper);
+  logW("CMD", String("Unknown: ") + cmdUpper);
   pulseLedError();
   return false;
 }
@@ -809,27 +1139,36 @@ static bool handleBleCommand(const String &raw, String &response) {
 // ---------------------------------------------------------------------------
 static String cmdBuffer = "";
 static unsigned long cmdLastByteMs = 0;
+static String cmdBuffer2 = "";
+static unsigned long cmdLastByteMs2 = 0;
 static constexpr unsigned long CMD_COMMIT_IDLE_MS = 120;
 
 static void printHelp() {
-  Serial.println(F("=================================================="));
-  Serial.println(F("  SmartChess — COMMANDS"));
-  Serial.println(F("=================================================="));
-  Serial.println(F("  SNAPSHOT     scan all squares + publish FEN"));
-  Serial.println(F("  STATUS       board + WiFi + BLE status"));
-  Serial.println(F("  F / FEN      print current FEN"));
-  Serial.println(F("  LEARN        scan + learn 32 piece UIDs"));
-  Serial.println(F("  CFG          read settings"));
-  Serial.println(F("  CFG_SET|...  write settings"));
-  Serial.println(F("  WIFI         WiFi status"));
-  Serial.println(F("  WIFI_SET|... configure WiFi"));
-  Serial.println(F("  WIFI_SCAN    scan networks"));
-  Serial.println(F("  WIFI_CONNECT/WIFI_DISCONNECT"));
-  Serial.println(F("  WEB          web publish config"));
-  Serial.println(F("  WEB_SET|...  configure web publish"));
-  Serial.println(F("  CLEAR        clear screen"));
-  Serial.println(F("  HELP         this help"));
-  Serial.println(F("=================================================="));
+  Serial.println(F("+----------------+----------------------------------------+"));
+  Serial.println(F("| SmartChess CMD | Description                            |"));
+  Serial.println(F("+----------------+----------------------------------------+"));
+  Serial.println(F("| START          | Begin new game — reset + notify server |"));
+  Serial.println(F("| STOP           | End current game — reset state         |"));
+  Serial.println(F("| SNAPSHOT       | Scan 2 plies + publish FEN (full move) |"));
+  Serial.println(F("| STATUS         | Board / WiFi / BLE status              |"));
+  Serial.println(F("| F  | FEN       | Print current FEN                      |"));
+  Serial.println(F("| LEARN          | Scan + learn 32 piece UIDs             |"));
+  Serial.println(F("+----------------+----------------------------------------+"));
+  Serial.println(F("| CFG            | Read settings                          |"));
+  Serial.println(F("| CFG_SET|...    | Write settings (VERBOSE,CONTINUOUS,...)|"));
+  Serial.println(F("+----------------+----------------------------------------+"));
+  Serial.println(F("| WIFI           | WiFi status                            |"));
+  Serial.println(F("| WIFI_SET|...   | Configure WiFi (SSID,PASS,AUTO)        |"));
+  Serial.println(F("| WIFI_SCAN      | Scan available networks                |"));
+  Serial.println(F("| WIFI_CONNECT   | Connect to saved WiFi                  |"));
+  Serial.println(F("| WIFI_DISCONNECT| Disconnect WiFi                        |"));
+  Serial.println(F("+----------------+----------------------------------------+"));
+  Serial.println(F("| WEB            | Web publish config                     |"));
+  Serial.println(F("| WEB_SET|...    | Configure web (URL,GAME,BOARD,ENABLED) |"));
+  Serial.println(F("+----------------+----------------------------------------+"));
+  Serial.println(F("| FACTORY_RESET  | Clear ALL settings + restart board     |"));
+  Serial.println(F("| HELP           | This help                              |"));
+  Serial.println(F("+----------------+----------------------------------------+"));
 }
 
 static void handleCommand(const String &raw) {
@@ -845,78 +1184,59 @@ static void handleCommand(const String &raw) {
     return;
   }
   if (cmdUpper == "SNAPSHOT") {
+    logI("BTN", "SNAPSHOT (serial) -> scanAllAndPublish()");
     scanAllAndPublish(); return;
   }
   if (cmdUpper == "STATUS") {
     pulseLedInfo();
-    Serial.print(F("[STATE] turn="));
-    Serial.print(whiteTurn ? "WHITE" : "BLACK");
-    Serial.print(F(" seq="));
-    Serial.print(moveSeq);
-    Serial.print(F(" pieces="));
-    Serial.println(pieceDBCount);
+    logI("STATE", String("turn=") + (whiteTurn ? "WHITE" : "BLACK")
+         + " seq=" + moveSeq + " pieces=" + pieceDBCount);
     return;
   }
   if (cmdUpper == "F" || cmdUpper == "FEN") {
-    Serial.print(F("[FEN] "));
-    Serial.println(buildCurrentFen());
+    logI("FEN", buildCurrentFen());
     return;
   }
   if (cmdUpper == "LEARN") {
-    initStandardBoard(board);
-    pieceDBCount = 0;
-    int learned = 0;
-    for (int idx = 0; idx < NUM_ANTENNAS; idx++) {
-      String uid = scanUID(mfrc522, idx);
-      if (uid.length() > 0) {
-        int file = idx / 8;
-        int rank = idx % 8;
-        char piece = board[file][rank];
-        if (piece != '.') { registerPiece(uid, piece); learned++; }
-      }
-    }
+    learnPieces();
     whiteTurn = true;
     moveSeq = 0;
-    Serial.print(F("[LEARN] Learned "));
-    Serial.print(learned);
-    Serial.println(F("/32 pieces"));
     return;
   }
 
   String response; bool handled = false;
   handleCommonCommand(cmd, cmdUpper, response, handled);
-  if (handled) {
-    if (response.startsWith("WIFI_ERR") || response.startsWith("CFG_ERR")) {
-      pulseLedError();
-    } else { pulseLedInfo(); }
-    if (response.length() > 0) {
-      bool isErr = response.startsWith("WIFI_ERR") || response.startsWith("CFG_ERR");
-      if (isErr) Serial.print(F("[ERR] ")); else Serial.print(F("[OK] "));
-      Serial.println(response);
+    if (handled) {
+      if (response.startsWith("WIFI_ERR") || response.startsWith("CFG_ERR")) {
+        pulseLedError();
+        logW("CMD", response);
+      } else {
+        pulseLedInfo();
+        logI("CMD", response);
+      }
+      return;
     }
-    return;
-  }
 
-  Serial.print(F("[CMD] Unknown: ")); Serial.println(cmd);
-  pulseLedError();
+    logW("CMD", String("Unknown: ") + cmd);
+    pulseLedError();
 }
 
-static void processSerialCommands() {
-  while (Serial.available()) {
-    char c = (char)Serial.read();
+static void processSerialInput(HardwareSerial &port, String &buf, unsigned long &lastMs) {
+  while (port.available()) {
+    char c = (char)port.read();
     if (c == '\r' || c == '\n') {
-      if (cmdBuffer.length() > 0) {
-        handleCommand(cmdBuffer);
-        cmdBuffer = ""; cmdLastByteMs = 0;
+      if (buf.length() > 0) {
+        handleCommand(buf);
+        buf = ""; lastMs = 0;
       }
       continue;
     }
-    if (cmdBuffer.length() < 256) { cmdBuffer += c; cmdLastByteMs = millis(); }
+    if (buf.length() < 256) { buf += c; lastMs = millis(); }
   }
-  if (cmdBuffer.length() > 0 && cmdLastByteMs > 0 &&
-      millis() - cmdLastByteMs >= CMD_COMMIT_IDLE_MS) {
-    handleCommand(cmdBuffer);
-    cmdBuffer = ""; cmdLastByteMs = 0;
+  if (buf.length() > 0 && lastMs > 0 &&
+      millis() - lastMs >= CMD_COMMIT_IDLE_MS) {
+    handleCommand(buf);
+    buf = ""; lastMs = 0;
   }
 }
 
@@ -927,6 +1247,7 @@ void smartChessBegin() {
   Serial.begin(115200);
   unsigned long t = millis();
   while (!Serial && millis() - t < 3000) {}
+  logInit();
 
 #if defined(RGB_BUILTIN)
   pinMode(RGB_BUILTIN, OUTPUT);
@@ -938,9 +1259,12 @@ void smartChessBegin() {
   esp_task_wdt_init(10, true);
   esp_task_wdt_add(NULL);
 
-  // Button
+  // Button (pull-up, polled in smartChessTick — no ISR)
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButtonPress, FALLING);
+
+  // UART2 — hardware serial for external controller
+  Serial2.begin(115200, SERIAL_8N1, UART2_RX, UART2_TX);
+  logSetSerial2(&Serial2);
 
   initRfidScanner(mfrc522);
   bleServiceBegin();
@@ -952,21 +1276,21 @@ void smartChessBegin() {
     loadSettingsFromStore();
     loadWifiSettingsFromStore();
     loadWebSettingsFromStore();
-    Serial.print(F("[CFG] Loaded ")); Serial.println(buildSettingsPayload("CFG"));
-    Serial.print(F("[WIFI] Loaded ")); Serial.println(buildWifiPayload("WIFI"));
+    logI("CFG", String("Loaded ") + buildSettingsPayload("CFG"));
+    logI("WIFI", String("Loaded ") + buildWifiPayload("WIFI"));
 
     if (wifiAutoConnect && wifiSavedSsid.length() > 0) {
       startWifiConnect();
       setLedBaseState(LED_WIFI_CONNECTING);
     }
   } else {
-    Serial.println(F("[CFG] Preferences init failed, using defaults"));
+    logW("CFG", "Preferences init failed, using defaults");
     pulseLedWarn();
   }
 
   byte version = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
   if (version == 0x00 || version == 0xFF) {
-    Serial.println(F("RC522 not found!"));
+    logE("HW", "RC522 not found — HALT");
     setLedBaseState(LED_WIFI_ERROR);
     pulseLedError();
     while (1) { updateLedStatus(); delay(8); }
@@ -985,12 +1309,13 @@ void smartChessBegin() {
                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
       boardID = String(buf);
       if (settingsStoreReady) settingsStore.putString(KEY_BOARD_ID, boardID);
-      Serial.print(F("[REG] boardID=")); Serial.println(boardID);
+      logI("REG", String("boardID=") + boardID);
     }
   }
 
   boardRegBegin(webServerUrl, boardID, webGameID);
   boardRegSetGameIDCallback(onBoardRegGameIDAssigned);
+  boardRegSetCommandCallback(onBoardRegCommand);
 
   initStandardBoard(board);
   pieceDBCount = 0;
@@ -1001,8 +1326,9 @@ void smartChessBegin() {
     squareUID[i] = "";
   }
 
-  Serial.println(F("[BOOT] System ready."));
-  Serial.println(F("[BOOT] Press button (GPIO 0) or send SNAPSHOT to scan + publish FEN."));
+  logI("BOOT", "UART2 ready — TX=19 RX=20 115200 baud");
+  logI("BOOT", "System ready.");
+  logI("BOOT", "Press button (GPIO 38) or send SNAPSHOT to scan + publish FEN.");
   printHelp();
   setLedBaseState(LED_IDLE);
   updateLedStatus();
@@ -1013,17 +1339,48 @@ void smartChessBegin() {
 // ---------------------------------------------------------------------------
 void smartChessTick() {
   bleServicePoll();
-  processSerialCommands();
+  processSerialInput(Serial, cmdBuffer, cmdLastByteMs);
+  processSerialInput(Serial2, cmdBuffer2, cmdLastByteMs2);
 
-  // ── Button debounce ──────────────────────────────────────────────
-  if (buttonInterruptFlag) {
-    noInterrupts();
-    buttonInterruptFlag = false;
-    interrupts();
-    unsigned long now = millis();
-    if (now - lastButtonMs > 50) {
-      lastButtonMs = now;
-      scanAllAndPublish();
+  // ── Button (state-machine debounce, broadcasts DOWN/UP) ───────────
+  {
+    int reading = digitalRead(BUTTON_PIN);
+    switch (btnState) {
+      case BTN_IDLE:
+        if (reading == LOW) {
+          btnDebounceUs = micros();
+          btnState = BTN_DEBOUNCE;
+        }
+        break;
+      case BTN_DEBOUNCE:
+        if (reading == HIGH) {
+          btnState = BTN_IDLE;                       // noise, back to idle
+        } else if (micros() - btnDebounceUs > 900) {
+          unsigned long now = millis();
+          if (now - btnLastPressMs > BTN_COOLDOWN_MS) {
+            btnLastPressMs = now;
+            bleLogImmediate("[BTN_DOWN]");
+            logI("BTN", whiteTurn ? "den luot di cua Den" : "den luot di cua Trang");
+            logI("BTN", "Pressed -> scanAllAndPublish()");
+            boardRegSetBtnPressed();
+            boardRegForceHeartbeat();
+            scanAllAndPublish();
+            btnState = BTN_WAIT_RELEASE;
+          }
+          // else cooldown active — discard
+        }
+        break;
+      case BTN_WAIT_RELEASE:
+        if (reading == HIGH) {
+          btnState = BTN_IDLE;
+          bleLogImmediate("[BTN_UP]");
+          logI("BTN", whiteTurn ? "den luot di cua Den" : "den luot di cua Trang");
+          logI("BTN", "Released -> scanAllAndPublish()");
+          boardRegSetBtnPressed();
+          boardRegForceHeartbeat();
+          scanAllAndPublish();
+        }
+        break;
     }
   }
 
@@ -1037,27 +1394,27 @@ void smartChessTick() {
       wifiConnectFailed = false;
       wifiLastError = "";
       wifiRetryScheduledMs = 0;
-      bleLog(String("[WIFI] CONNECTED ip=") + WiFi.localIP().toString());
+      logI("WIFI", String("CONNECTED ip=") + WiFi.localIP().toString());
       pulseLedOk();
     } else if (wifiStatus == WL_CONNECT_FAILED) {
       wifiConnectInProgress = false;
       wifiConnectFailed = true;
       wifiLastError = "AUTH";
-      bleLog(String("[WIFI] CONNECT_FAILED auth ssid=") + wifiSavedSsid);
+      logE("WIFI", String("CONNECT_FAILED auth ssid=") + wifiSavedSsid);
       pulseLedError();
       if (wifiAutoConnect) wifiRetryScheduledMs = millis() + WIFI_RETRY_DELAY_MS;
     } else if (wifiStatus == WL_NO_SSID_AVAIL) {
       wifiConnectInProgress = false;
       wifiConnectFailed = true;
       wifiLastError = "NO_SSID";
-      bleLog(String("[WIFI] CONNECT_FAILED no_ssid ssid=") + wifiSavedSsid);
+      logE("WIFI", String("CONNECT_FAILED no_ssid ssid=") + wifiSavedSsid);
       pulseLedError();
       if (wifiAutoConnect) wifiRetryScheduledMs = millis() + WIFI_RETRY_DELAY_MS;
     } else if (millis() - wifiConnectStartMs > WIFI_CONNECT_TIMEOUT_MS) {
       wifiConnectInProgress = false;
       wifiConnectFailed = true;
       wifiLastError = "TIMEOUT";
-      bleLog(String("[WIFI] CONNECT_TIMEOUT ssid=") + wifiSavedSsid);
+      logE("WIFI", String("CONNECT_TIMEOUT ssid=") + wifiSavedSsid);
       pulseLedError();
       if (wifiAutoConnect) wifiRetryScheduledMs = millis() + WIFI_RETRY_DELAY_MS;
     }
@@ -1066,7 +1423,7 @@ void smartChessTick() {
   if (wifiRetryScheduledMs > 0 && millis() >= wifiRetryScheduledMs) {
     wifiRetryScheduledMs = 0;
     if (!wifiConnectedNow && wifiAutoConnect && wifiSavedSsid.length() > 0) {
-      bleLog(String("[WIFI] AUTO_RETRY ssid=") + wifiSavedSsid);
+      logI("WIFI", String("AUTO_RETRY ssid=") + wifiSavedSsid);
       startWifiConnect();
     }
   }
@@ -1078,6 +1435,13 @@ void smartChessTick() {
       startWifiConnect();
       pulseLedWarn();
     }
+  }
+
+  // ── Deferred START scan ───────────────────────────────────────────
+  if (pendingStartScan) {
+    pendingStartScan = false;
+    String tmp;
+    executeStartScan(tmp);
   }
 
   // ── LED + subsystems ─────────────────────────────────────────────

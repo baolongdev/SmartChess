@@ -3,6 +3,7 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include "utils/Logger.h"
 
 namespace {
 
@@ -25,6 +26,9 @@ constexpr unsigned long INTERVAL_FAST_MS   =  5000;  //  5 s — waiting for gam
 static String gServerUrl;
 static String gBoardID;
 static String gCurrentGameID;
+
+// Button press flag — set by boardRegSetBtnPressed(), cleared after heartbeat sends it
+static bool gBtnPressed = false;
 static unsigned long gLastSentMs   = 0;
 static bool          gFastPoll     = false;
 
@@ -88,20 +92,20 @@ static void doScanResult() {
         // Can't even start — re-queue for next tick
         gScanResult = savedResult;
         gScanDetail = savedDetail;
-        Serial.println(F("[REG] scan-result http.begin failed, will retry"));
+        logW("REG", "scan-result http.begin failed, will retry");
         return;
     }
     http.addHeader("Content-Type", "application/json");
     http.setTimeout(8000);
     int code = http.POST(body);
     http.end();
-    Serial.printf("[REG] scan-result HTTP %d\n", code);
+    logI("REG", String("scan-result HTTP ") + code);
 
     if (code < 0) {
         // Network/TLS error — re-queue so it retries on next boardRegTick()
         gScanResult = savedResult;
         gScanDetail = savedDetail;
-        Serial.println(F("[REG] scan-result network error, will retry"));
+        logW("REG", "scan-result network error, will retry");
     }
     // 4xx/5xx: server received but rejected — don't retry
 }
@@ -139,7 +143,7 @@ static void doAlert() {
     http.setTimeout(3000);
     int code = http.POST(body);
     http.end();
-    Serial.printf("[REG] alert %s HTTP %d\n", body.c_str(), code);
+    logI("REG", String("alert HTTP ") + code);
 }
 
 // ---------------------------------------------------------------------------
@@ -160,14 +164,17 @@ static bool doHeartbeat() {
     body += gCurrentGameID;
     body += "\",\"ip\":\"";
     body += ip;
-    body += "\"}";
+    body += "\",\"btn\":";
+    body += gBtnPressed ? "1" : "0";
+    body += "}";
+    gBtnPressed = false;  // cleared after heartbeat sends
 
     WiFiClient plain;
     WiFiClientSecure secure;
     HTTPClient http;
 
     if (!httpBegin(http, plain, secure, url)) {
-        Serial.println(F("[REG] http.begin failed"));
+        logW("REG", "heartbeat http.begin failed");
         return false;
     }
 
@@ -177,7 +184,7 @@ static bool doHeartbeat() {
     int code = http.POST(body);
     if (code < 200 || code >= 300) {
         http.end();
-        Serial.printf("[REG] heartbeat error HTTP %d\n", code);
+        logW("REG", String("heartbeat error HTTP ") + code);
         return false;
     }
 
@@ -187,20 +194,17 @@ static bool doHeartbeat() {
     // ── gameID assignment (apply BEFORE logging so the log shows final value) ──
     String assignedGame = extractJsonString(resp, "gameID");
     if (assignedGame.length() > 0 && assignedGame != gCurrentGameID) {
-        Serial.printf("[REG] gameID updated: %s -> %s\n",
-                      gCurrentGameID.c_str(), assignedGame.c_str());
+        logI("REG", String("gameID updated: ") + gCurrentGameID + " -> " + assignedGame);
         gCurrentGameID = assignedGame;
         if (gGameIDCallback != nullptr) gGameIDCallback(assignedGame);
     }
 
-    Serial.printf("[REG] heartbeat ok (%d) board=%s game=%s\n",
-                  code, gBoardID.c_str(), gCurrentGameID.c_str());
+    logI("REG", String("heartbeat ok (") + code + ") board=" + gBoardID + " game=" + gCurrentGameID);
 
     // ── command from server ──────────────────────────────────────────────
     String command = extractJsonString(resp, "command");
     if (command.length() > 0 && gCommandCallback != nullptr) {
-        Serial.print(F("[REG] server command="));
-        Serial.println(command);
+        logI("REG", String("server command=") + command);
         gCommandCallback(command);
     }
 
@@ -221,10 +225,7 @@ void boardRegBegin(const String &serverUrl,
     gCurrentGameID = gameID;
     gLastSentMs    = 0;  // fire first heartbeat immediately
 
-    Serial.print(F("[REG] Init board="));
-    Serial.print(gBoardID);
-    Serial.print(F(" url="));
-    Serial.println(gServerUrl);
+    logI("REG", String("Init board=") + gBoardID + " url=" + gServerUrl);
 }
 
 void boardRegSetGameID(const String &gameID) {
@@ -251,6 +252,10 @@ void boardRegQueueScanResult(const String &result, const String &detail) {
 void boardRegQueueAlert(const String &code, const String &detail) {
     gAlertCode   = code;
     gAlertDetail = detail;
+}
+
+void boardRegSetBtnPressed() {
+    gBtnPressed = true;
 }
 
 void boardRegTick() {

@@ -63,3 +63,7 @@ void boardRegQueueScanResult(const String &result, const String &detail);
  * @param detail  Human-readable context string (square names, UIDs, etc.)
  */
 void boardRegQueueAlert(const String &code, const String &detail);
+
+/** Mark the physical button as pressed since last heartbeat.
+ *  The next heartbeat will include "btn":1, then the flag auto-clears. */
+void boardRegSetBtnPressed();

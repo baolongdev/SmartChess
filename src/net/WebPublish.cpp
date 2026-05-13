@@ -3,6 +3,7 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include "utils/Logger.h"
 
 namespace {
 
@@ -79,19 +80,11 @@ static bool doPost(const String &fen, int seq) {
 
     if (statusCode < 200 || statusCode >= 300) {
         gLastError = String("HTTP_") + String(statusCode);
-        Serial.print(F("[FEN] POST failed status="));
-        Serial.print(statusCode);
-        Serial.print(F(" body="));
-        Serial.println(respBody.substring(0, 80));
+        logW("FEN", String("POST failed status=") + statusCode + " body=" + respBody.substring(0, 80));
         return false;
     }
 
-    Serial.print(F("[FEN] POST ok fen="));
-    Serial.print(fen.substring(0, 40));
-    Serial.print(F(" seq="));
-    Serial.print(seq);
-    Serial.print(F(" status="));
-    Serial.println(statusCode);
+    logI("FEN", String("POST ok fen=") + fen.substring(0, 40) + " seq=" + seq + " status=" + statusCode);
 
     gLastError = "";
     return true;
@@ -108,14 +101,7 @@ void webPublishBegin(const String &serverUrl, const String &gameID, const String
     gLastError  = "";
     gLastStatus = 0;
 
-    Serial.print(F("[FEN] Init url="));
-    Serial.print(gServerUrl);
-    Serial.print(F(" game="));
-    Serial.print(gGameID);
-    Serial.print(F(" board="));
-    Serial.print(gBoardID);
-    Serial.print(F(" enabled="));
-    Serial.println(gEnabled ? F("YES") : F("NO"));
+    logI("FEN", String("Init url=") + gServerUrl + " game=" + gGameID + " board=" + gBoardID + " enabled=" + (gEnabled ? "YES" : "NO"));
 }
 
 void webPublishSetConfig(const String &serverUrl, const String &gameID, const String &boardID, bool enabled) {
@@ -129,7 +115,7 @@ void webPublishFEN(const String &fen, int seq) {
     if (!gEnabled) return;
 
     if (gState == WEB_QUEUED || gState == WEB_SENDING) {
-        Serial.println(F("[FEN] Busy, dropping snapshot (will be overwritten by next)"));
+        logW("FEN", "Busy, dropping snapshot (will be overwritten by next)");
         return;
     }
 

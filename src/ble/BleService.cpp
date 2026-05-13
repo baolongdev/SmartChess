@@ -4,6 +4,7 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include "utils/Logger.h"
 
 namespace {
 
@@ -58,13 +59,13 @@ class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
     (void)server;
     gBleConnected = true;
-    Serial.println(F("[BLE] Connected"));
+    logI("BLE", "Connected");
   }
 
   void onDisconnect(BLEServer *server) override {
     (void)server;
     gBleConnected = false;
-    Serial.println(F("[BLE] Disconnected, advertising..."));
+    logI("BLE", "Disconnected, advertising...");
     BLEDevice::startAdvertising();
   }
 };
@@ -121,13 +122,13 @@ void bleServiceBegin() {
   advertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
 
-  Serial.println(F("[BLE] Service started"));
-  Serial.print(F("[BLE] Device: "));    Serial.println(kDeviceName);
-  Serial.print(F("[BLE] Service: "));   Serial.println(kServiceUuid);
-  Serial.print(F("[BLE] Cmd char: "));  Serial.println(kCmdCharUuid);
-  Serial.print(F("[BLE] Log char: "));  Serial.println(kLogCharUuid);
-  Serial.print(F("[BLE] OTA char: "));  Serial.println(kOtaCharUuid);
-  Serial.println(kBleHelp);
+  logI("BLE", "Service started");
+  logI("BLE", String("Device: ") + kDeviceName);
+  logI("BLE", String("Service: ") + kServiceUuid);
+  logI("BLE", String("Cmd char: ") + kCmdCharUuid);
+  logI("BLE", String("Log char: ") + kLogCharUuid);
+  logI("BLE", String("OTA char: ") + kOtaCharUuid);
+  logI("BLE", kBleHelp);
 }
 
 bool bleIsConnected() {
@@ -155,12 +156,7 @@ void bleServicePoll() {
       if (gBleConnected) gCmdCharacteristic->notify();
     }
 
-    String logLine = String("[CMD] ") + cmd + String(" -> ") + response;
-    Serial.println(logLine);
-    if (gLogCharacteristic != nullptr) {
-      gLogCharacteristic->setValue(logLine.c_str());
-      if (gBleConnected) gLogCharacteristic->notify();
-    }
+    logI("CMD", cmd + " -> " + response);
   }
 
   if (gLogReady) {
