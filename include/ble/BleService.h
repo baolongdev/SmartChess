@@ -21,6 +21,9 @@ using BleOtaDataCallback = void (*)(const uint8_t *data, size_t len);
 /** Initialize BLE server, create GATT service, start advertising. */
 void bleServiceBegin();
 
+/** Update the FEN characteristic value and notify connected clients. */
+void bleUpdateFEN(const String &fen);
+
 /** Returns true if a BLE central is currently connected. */
 bool bleIsConnected();
 

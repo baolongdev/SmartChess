@@ -78,11 +78,12 @@ void bleServiceBegin() {
 
   BLEService *service = gServer->createService(kServiceUuid);
 
-  // FEN char: READ-only static placeholder. Game data flows via WiFi, not BLE.
+  // FEN char: READ + NOTIFY — clients subscribe to receive FEN updates on each scan.
   gFenCharacteristic = service->createCharacteristic(
     kFenCharUuid,
-    BLECharacteristic::PROPERTY_READ
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
   );
+  gFenCharacteristic->addDescriptor(new BLE2902());
   gFenCharacteristic->setValue("-");
 
   gCmdCharacteristic = service->createCharacteristic(
@@ -204,4 +205,10 @@ void bleOtaRespond(const char *response) {
   if (gOtaCharacteristic == nullptr) return;
   gOtaCharacteristic->setValue(response);
   if (gBleConnected) gOtaCharacteristic->notify();
+}
+
+void bleUpdateFEN(const String &fen) {
+  if (gFenCharacteristic == nullptr) return;
+  gFenCharacteristic->setValue(fen.c_str());
+  if (gBleConnected) gFenCharacteristic->notify();
 }

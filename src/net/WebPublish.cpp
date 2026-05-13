@@ -4,13 +4,8 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
-// ---------------------------------------------------------------------------
-// Internal state + helpers
-// ---------------------------------------------------------------------------
-
 namespace {
 
-// Begin HTTPClient with correct transport based on URL scheme (http vs https).
 static bool httpBegin(HTTPClient &http, WiFiClient &plain, WiFiClientSecure &secure,
                       const String &url) {
     if (url.startsWith("https://")) {
@@ -19,7 +14,6 @@ static bool httpBegin(HTTPClient &http, WiFiClient &plain, WiFiClientSecure &sec
     }
     return http.begin(plain, url);
 }
-
 
 enum WebPublishState {
     WEB_IDLE = 0,
@@ -31,18 +25,16 @@ enum WebPublishState {
 
 static String   gServerUrl   = "";
 static String   gGameID      = "";
+static String   gBoardID     = "";
 static bool     gEnabled     = false;
 
 static WebPublishState gState       = WEB_IDLE;
-static String          gPendingUci  = "";
+static String          gPendingFen  = "";
 static int             gPendingSeq  = 0;
 static String          gLastError   = "";
 static int             gLastStatus  = 0;
 
-// ---------------------------------------------------------------------------
-// Perform the HTTP POST synchronously.  Returns true on 2xx response.
-// ---------------------------------------------------------------------------
-static bool doPost(const String &uci, int seq) {
+static bool doPost(const String &fen, int seq) {
     if (WiFi.status() != WL_CONNECTED) {
         gLastError = "WIFI_NOT_CONNECTED";
         return false;
@@ -55,13 +47,14 @@ static bool doPost(const String &uci, int seq) {
 
     String url = gServerUrl;
     if (!url.endsWith("/")) url += "/";
-    url += "moves";
+    url += "fen";
 
-    // Build JSON body manually — no external library needed
-    String body = "{\"uci\":\"";
-    body += uci;
+    String body = "{\"fen\":\"";
+    body += fen;
     body += "\",\"gameID\":\"";
     body += gGameID;
+    body += "\",\"boardID\":\"";
+    body += gBoardID;
     body += "\",\"seq\":";
     body += String(seq);
     body += "}";
@@ -76,7 +69,7 @@ static bool doPost(const String &uci, int seq) {
     }
 
     http.addHeader("Content-Type", "application/json");
-    http.setTimeout(5000);  // 5 s — generous for LAN
+    http.setTimeout(5000);
 
     int statusCode = http.POST(body);
     String respBody = http.getString();
@@ -86,15 +79,15 @@ static bool doPost(const String &uci, int seq) {
 
     if (statusCode < 200 || statusCode >= 300) {
         gLastError = String("HTTP_") + String(statusCode);
-        Serial.print(F("[WEB] POST failed status="));
+        Serial.print(F("[FEN] POST failed status="));
         Serial.print(statusCode);
         Serial.print(F(" body="));
         Serial.println(respBody.substring(0, 80));
         return false;
     }
 
-    Serial.print(F("[WEB] POST ok uci="));
-    Serial.print(uci);
+    Serial.print(F("[FEN] POST ok fen="));
+    Serial.print(fen.substring(0, 40));
     Serial.print(F(" seq="));
     Serial.print(seq);
     Serial.print(F(" status="));
@@ -106,45 +99,44 @@ static bool doPost(const String &uci, int seq) {
 
 }  // namespace
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-void webPublishBegin(const String &serverUrl, const String &gameID, bool enabled) {
+void webPublishBegin(const String &serverUrl, const String &gameID, const String &boardID, bool enabled) {
     gServerUrl  = serverUrl;
     gGameID     = gameID;
+    gBoardID    = boardID;
     gEnabled    = enabled;
     gState      = WEB_IDLE;
     gLastError  = "";
     gLastStatus = 0;
 
-    Serial.print(F("[WEB] Init url="));
+    Serial.print(F("[FEN] Init url="));
     Serial.print(gServerUrl);
     Serial.print(F(" game="));
     Serial.print(gGameID);
+    Serial.print(F(" board="));
+    Serial.print(gBoardID);
     Serial.print(F(" enabled="));
     Serial.println(gEnabled ? F("YES") : F("NO"));
 }
 
-void webPublishSetConfig(const String &serverUrl, const String &gameID, bool enabled) {
+void webPublishSetConfig(const String &serverUrl, const String &gameID, const String &boardID, bool enabled) {
     gServerUrl = serverUrl;
     gGameID    = gameID;
+    gBoardID   = boardID;
     gEnabled   = enabled;
 }
 
-void webPublishMove(const String &uci, int seq) {
+void webPublishFEN(const String &fen, int seq) {
     if (!gEnabled) return;
 
-    // Drop if a job is already in flight — the server handles dedup via seq
     if (gState == WEB_QUEUED || gState == WEB_SENDING) {
-        Serial.println(F("[WEB] Busy, dropping move (will retry on next)"));
+        Serial.println(F("[FEN] Busy, dropping snapshot (will be overwritten by next)"));
         return;
     }
 
-    gPendingUci = uci;
-    gPendingSeq = seq;
-    gLastStatus = 0;   // reset so caller can detect when the response arrives
-    gState      = WEB_QUEUED;
+    gPendingFen  = fen;
+    gPendingSeq  = seq;
+    gLastStatus  = 0;
+    gState       = WEB_QUEUED;
 }
 
 int webPublishGetLastStatus() {
@@ -155,7 +147,7 @@ void webPublishPoll() {
     if (!gEnabled || gState != WEB_QUEUED) return;
 
     gState = WEB_SENDING;
-    bool ok = doPost(gPendingUci, gPendingSeq);
+    bool ok = doPost(gPendingFen, gPendingSeq);
     gState  = ok ? WEB_DONE : WEB_ERROR;
 }
 
@@ -171,12 +163,18 @@ const String& webPublishGetGameID() {
     return gGameID;
 }
 
+const String& webPublishGetBoardID() {
+    return gBoardID;
+}
+
 String webPublishStatusPayload(const char *prefix) {
     String s = String(prefix);
     s += "|url=";
     s += gServerUrl.length() > 0 ? gServerUrl : "-";
     s += "|game=";
     s += gGameID.length() > 0 ? gGameID : "-";
+    s += "|board=";
+    s += gBoardID.length() > 0 ? gBoardID : "-";
     s += "|enabled=";
     s += gEnabled ? "1" : "0";
     s += "|state=";
