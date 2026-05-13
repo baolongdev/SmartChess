@@ -673,7 +673,7 @@ static bool startWifiConnect() {
   }
 
   WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true);
+  WiFi.disconnect(false);
   delay(60);
   WiFi.begin(wifiSavedSsid.c_str(), wifiSavedPass.c_str());
   wifiConnectInProgress = true;
